@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "ops-backend",
+      name: "backend-ops",
       script: "src/server.js",
       cwd: "/home/azureuser/projects/backend-ops",
       interpreter: "node",
@@ -11,8 +11,8 @@ module.exports = {
       },
       autorestart: true,
       max_memory_restart: "500M",
-      out_file: "~/.pm2/logs/ops-backend-out.log",
-      error_file: "~/.pm2/logs/ops-backend-error.log",
+      out_file: "~/.pm2/logs/backend-ops-out.log",
+      error_file: "~/.pm2/logs/backend-ops-error.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
     },
   ],
