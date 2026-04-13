@@ -16,5 +16,6 @@ router.post("/:id/pack", asyncHandler(ctrl.pack));
 router.post("/:id/complete", asyncHandler(ctrl.complete));
 router.post("/:id/details", asyncHandler(ctrl.addDetail));
 router.patch("/:id/details/:detailId", asyncHandler(ctrl.updateDetail));
+router.get("/:id/export-excel", asyncHandler(ctrl.exportExcel));
 
 module.exports = router;

@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require("uuid");
+const xlsx = require("xlsx");
 const { getDb, toObjectId } = require("../config/db");
 const { sendSuccess, sendError } = require("../utils/response");
 
@@ -209,4 +210,136 @@ exports.listInvoices = async (_req, res) => {
     .limit(50)
     .toArray();
   sendSuccess(res, invoices);
+};
+
+exports.exportExcel = async (req, res) => {
+  const inwardId = req.params.id;
+  const db = await getDb();
+
+  // 1. Get the inward record
+  const inward = await db.collection("inwards").findOne({ inward_id: inwardId });
+  if (!inward) return sendError(res, "Inward not found", 404);
+
+  // 2. Get linked invoices
+  const objectIds = (inward.invoice_ids || []).map((id) => {
+    try { return toObjectId(id); } catch { return null; }
+  }).filter(Boolean);
+
+  const invoices = objectIds.length > 0
+    ? await db.collection("invoices").find({ _id: { $in: objectIds } }).toArray()
+    : [];
+
+  const invoiceMap = {};
+  invoices.forEach((inv) => { invoiceMap[inv.invoice_id] = inv; });
+  const actualInvoiceUUIDs = invoices.map((inv) => inv.invoice_id).filter(Boolean);
+
+  // 3. Get invoice line items
+  const lineItems = actualInvoiceUUIDs.length > 0
+    ? await db.collection("invoice_line_items").find({ invoice_id: { $in: actualInvoiceUUIDs } }).toArray()
+    : [];
+
+  // 4. Build Excel rows from line items
+  const rows = lineItems.map((item, idx) => {
+    const qty = Number(item.quantity || item.qty || 0);
+    const oldPrice = Number(item.unit_price || item.old_price || item.rate || 0);
+    const oldTotal = qty * oldPrice;
+    const newRate = Number(item.new_rate || item.new_price || oldPrice);
+    const newTotal = qty * newRate;
+    const igstRate = Number(item.igst_rate || item.igst || 18);
+    const inrRate = Number(item.inr_rate || item.exchange_rate || 0);
+    const inrTotal = newTotal * inrRate;
+    const igstTotal = inrTotal * (igstRate / 100);
+    const partNetWt = Number(item.part_net_wt || item.net_weight || item.unit_weight || 0);
+    const totalNetWt = Number(item.total_net_wt || 0) || (qty * partNetWt);
+
+    return {
+      "SR NO": idx + 1,
+      "PART NO": item.part_number || item.item_no || item.sku_code || "",
+      "DESC": item.description || item.desc || "",
+      "TOTAL Q": qty || "",
+      "COO": item.coo || item.country_of_origin || "",
+      "HSN CODE": item.hsn_code || item.hsn || "",
+      "PART NET WT (KGS)": partNetWt || "",
+      "TOTAL NET WT": totalNetWt || "",
+      "BO REFERENCE": item.bo_reference || item.ref_no || item.order_ref || "",
+      "BO Q": item.bo_qty || item.bo_q || "",
+      "BRAND": item.brand || item.brand_name || "",
+      "OLD PRICE": oldPrice || "",
+      "OLD TOTAL": oldTotal || "",
+      "NEW RATE": newRate || "",
+      "NEW TOTAL": newTotal || "",
+      "IGST RATE": igstRate || "",
+      "NDIA DISTRC": item.ndia_distrc || item.district || "",
+      "INR RATE": inrRate || "",
+      "INR TOTAL": inrTotal ? inrTotal.toFixed(2) : "",
+      "IGST TOTAL": igstTotal ? igstTotal.toFixed(2) : "",
+    };
+  });
+
+  // If no line items, still create an Excel with inward summary
+  if (rows.length === 0) {
+    rows.push({
+      "SR NO": "—",
+      "PART NO": "No line items found",
+      "DESC": "", "TOTAL Q": "", "COO": "", "HSN CODE": "",
+      "PART NET WT (KGS)": "", "TOTAL NET WT": "", "BO REFERENCE": "",
+      "BO Q": "", "BRAND": "", "OLD PRICE": "", "OLD TOTAL": "",
+      "NEW RATE": "", "NEW TOTAL": "", "IGST RATE": "",
+      "NDIA DISTRC": "", "INR RATE": "", "INR TOTAL": "", "IGST TOTAL": "",
+    });
+  }
+
+  // 5. Build workbook
+  const wb = xlsx.utils.book_new();
+
+  // Sheet 1: Line Items
+  const ws = xlsx.utils.json_to_sheet(rows);
+  ws["!cols"] = [
+    { wch: 6 },  // SR NO
+    { wch: 16 }, // PART NO
+    { wch: 30 }, // DESC
+    { wch: 8 },  // TOTAL Q
+    { wch: 10 }, // COO
+    { wch: 10 }, // HSN CODE
+    { wch: 16 }, // PART NET WT
+    { wch: 14 }, // TOTAL NET WT
+    { wch: 16 }, // BO REFERENCE
+    { wch: 8 },  // BO Q
+    { wch: 14 }, // BRAND
+    { wch: 12 }, // OLD PRICE
+    { wch: 12 }, // OLD TOTAL
+    { wch: 12 }, // NEW RATE
+    { wch: 12 }, // NEW TOTAL
+    { wch: 10 }, // IGST RATE
+    { wch: 14 }, // NDIA DISTRC
+    { wch: 10 }, // INR RATE
+    { wch: 14 }, // INR TOTAL
+    { wch: 14 }, // IGST TOTAL
+  ];
+  xlsx.utils.book_append_sheet(wb, ws, "Inward Line Items");
+
+  // Sheet 2: Inward Summary
+  const summaryRows = [
+    { "Field": "Inward ID", "Value": inward.inward_id },
+    { "Field": "Status", "Value": inward.status },
+    { "Field": "Date", "Value": inward.inward_date ? new Date(inward.inward_date).toLocaleDateString("en-IN") : "" },
+    { "Field": "Created By", "Value": inward.created_by },
+    { "Field": "Vendor Name", "Value": inward.vendor_name || "" },
+    { "Field": "Linked Invoices", "Value": invoices.map(inv => inv.invoice_number || inv._id).join(", ") },
+    { "Field": "Receive Boxes", "Value": inward.receive_boxes || "" },
+    { "Field": "Total SKUs", "Value": (inward.allowed_skus || []).length },
+    { "Field": "Exceptions", "Value": (inward.exceptions || []).length },
+  ];
+  const wsSummary = xlsx.utils.json_to_sheet(summaryRows);
+  wsSummary["!cols"] = [{ wch: 20 }, { wch: 40 }];
+  xlsx.utils.book_append_sheet(wb, wsSummary, "Inward Summary");
+
+  // 6. Send file
+  const buffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+  const safeId = inwardId.slice(0, 8);
+  const dateStr = new Date().toISOString().slice(0, 10);
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="Inward_${safeId}_${dateStr}.xlsx"`);
+  return res.send(buffer);
 };
