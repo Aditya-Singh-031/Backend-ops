@@ -7,7 +7,15 @@ router.use("/upload", require("./upload.routes"));
 router.use("/shipments", require("./shipment.routes"));
 router.use("/buyers", require("./buyer.routes"));
 router.use("/products", require("./product.routes"));
+
+// FIXED: Map both /orders and /purchase-orders to the same file so legacy frontend works!
 router.use("/orders", require("./order.routes"));
+router.use("/purchase-orders", require("./order.routes")); 
+
+// NEW: Missing routes added
+router.use("/dashboard", require("./dashboard.routes"));
+router.use("/operations", require("./operation.routes"));
+
 router.use("/order-details", require("./orderDetail.routes"));
 router.use("/inwards", require("./inward.routes"));
 router.use("/outwards", require("./outward.routes"));
