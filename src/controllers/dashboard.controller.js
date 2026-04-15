@@ -1,8 +1,9 @@
 const { getDb } = require("../config/db");
+const { sendSuccess } = require("../utils/response");
 
 exports.getStats = async (req, res) => {
-  // Empty scaffolding to fix 404 - will connect to DB later
-  res.json({
+  // Returns properly wrapped empty data so the frontend doesn't crash
+  sendSuccess(res, {
     totalInvoices: 0,
     pendingVerification: 0,
     verified: 0,
@@ -11,6 +12,6 @@ exports.getStats = async (req, res) => {
 };
 
 exports.getSuppliers = async (req, res) => {
-  // Empty scaffolding to fix 404
-  res.json([]);
+  // Wrapped as { success: true, data: [] }
+  sendSuccess(res, []);
 };
