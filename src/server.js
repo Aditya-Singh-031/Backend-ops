@@ -9,13 +9,21 @@ const { connectDb } = require("./config/db");
 const app = express();
 
 // ── Middleware ────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS)
-  .split(",")
-  .map((o) => o.trim());
+// SAFELY parse CORS origins to prevent fatal crashes
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
+  : [
+      "https://ops.morsebiz.com",
+      "https://ops-frontend.morsebiz.com",
+      "https://bills-parser.morsebiz.com",
+      "http://localhost:3000",
+      "http://localhost:5004"
+    ];
 
 app.use(
   cors({
     origin: (origin, cb) => {
+      // Allow requests with no origin (like mobile apps or curl) or if in the allowed list
       if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
       cb(new Error("Not allowed by CORS"));
     },
@@ -46,7 +54,7 @@ app.use((err, _req, res, _next) => {
 });
 
 // ── Start ────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5003;
 
 async function start() {
   await connectDb();
