@@ -7,7 +7,11 @@ const { OpenAI } = require("openai");
 const { z } = require("zod");
 const { zodResponseFormat } = require("openai/helpers/zod");
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Changed this:
+// const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// To this (Temporary hardcode):
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "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" });
 
 // Define exact structured output schema
 const LineItemSchema = z.object({
