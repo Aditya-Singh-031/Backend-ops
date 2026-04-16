@@ -7,7 +7,7 @@ router.use("/upload", require("./upload.routes"));
 router.use("/shipments", require("./shipment.routes"));
 router.use("/buyers", require("./buyer.routes"));
 router.use("/products", require("./product.routes"));
-
+router.use("/invoices", require("./invoice.routes"));
 // Mapped both for legacy support
 router.use("/orders", require("./order.routes"));
 router.use("/purchase-orders", require("./order.routes")); 
