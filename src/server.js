@@ -5,25 +5,17 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const { connectDb } = require("./config/db");
+const { createProxyMiddleware } = require("http-proxy-middleware"); // 💥 Added Proxy
 
 const app = express();
 
-// ── Middleware ────────────────────────────────────────
-// SAFELY parse CORS origins to prevent fatal crashes
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
-  : [
-      "https://ops.morsebiz.com",
-      "https://ops-frontend.morsebiz.com",
-      "https://bills-parser.morsebiz.com",
-      "http://localhost:3000",
-      "http://localhost:5004"
-    ];
+  : ["https://ops-frontend.morsebiz.com", "http://localhost:5004"];
 
 app.use(
   cors({
     origin: (origin, cb) => {
-      // Allow requests with no origin (like mobile apps or curl) or if in the allowed list
       if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
       cb(new Error("Not allowed by CORS"));
     },
@@ -31,29 +23,37 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "50mb" }));
+// 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python (Port 8000)
+// This MUST be placed before express.json() so PDF file streams don't break
+// 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python (Port 8000)
+app.use(
+  "/api/invoices", // Catch what the frontend is currently sending
+  createProxyMiddleware({
+    target: "http://127.0.0.1:8000",
+    changeOrigin: true,
+    pathRewrite: {
+      "^/api/invoices": "/api/v1/invoices", // Secretly add the 'v1' for Python
+    },
+  })
+);
+
+app.use(express.json({ limit: "50mb" })); // Make sure this stays BELOW the proxy
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
-// ── Health check ─────────────────────────────────────
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
 
-// ── Routes ───────────────────────────────────────────
 app.use("/api", require("./routes"));
 
-// ── Global error handler ─────────────────────────────
 app.use((err, _req, res, _next) => {
   console.error("Unhandled error:", err);
-  res.status(err.status || 500).json({
-    error: process.env.NODE_ENV === "production" ? "Internal server error" : err.message,
-  });
+  res.status(err.status || 500).json({ error: err.message });
 });
 
-// ── Start ────────────────────────────────────────────
 const PORT = process.env.PORT || 5003;
 
 async function start() {
@@ -63,7 +63,4 @@ async function start() {
   });
 }
 
-start().catch((err) => {
-  console.error("Failed to start:", err);
-  process.exit(1);
-});
+start().catch(console.error);
