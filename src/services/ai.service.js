@@ -1,5 +1,8 @@
 const fs = require("fs");
-const pdfParse = require("pdf-parse");
+// SAFELY require pdf-parse. Handle both CommonJS and ES Module structures.
+const pdfParseLib = require("pdf-parse");
+const pdfParse = pdfParseLib.default || pdfParseLib;
+
 const { OpenAI } = require("openai");
 const { z } = require("zod");
 const { zodResponseFormat } = require("openai/helpers/zod");
@@ -34,7 +37,9 @@ const InvoiceSchema = z.object({
 exports.parseInvoiceFile = async (filePath) => {
   // 1. Read and extract raw text from the uploaded PDF
   const dataBuffer = fs.readFileSync(filePath);
-  const data = await pdfParse(dataBuffer);
+  
+  // Now this will not throw "is not a function"
+  const data = await pdfParse(dataBuffer); 
   const text = data.text;
 
   // 2. Pass to OpenAI using strict JSON structured formats
