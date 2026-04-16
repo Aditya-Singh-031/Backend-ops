@@ -1,19 +1,28 @@
 const fs = require("fs");
-// SAFELY require pdf-parse. Handle both CommonJS and ES Module structures.
-const pdfParseLib = require("pdf-parse");
-const pdfParse = pdfParseLib.default || pdfParseLib;
-
+const rawPdfParse = require("pdf-parse");
 const { OpenAI } = require("openai");
 const { z } = require("zod");
 const { zodResponseFormat } = require("openai/helpers/zod");
 
-// Changed this:
-// const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// ─── BULLETPROOF PDF PARSER WRAPPER ───
+// Safely hunts down the correct function no matter how npm installed the module
+async function extractPdfText(buffer) {
+  if (typeof rawPdfParse === "function") {
+    return (await rawPdfParse(buffer)).text;
+  } else if (rawPdfParse && typeof rawPdfParse.default === "function") {
+    return (await rawPdfParse.default(buffer)).text;
+  } else {
+    console.error("Unrecognized pdf-parse export:", rawPdfParse);
+    throw new Error("PDF Library failed to load as a function. Format unrecognized.");
+  }
+}
 
-// To this (Temporary hardcode):
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "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" });
+// ─── OPENAI INIT ───
+const openai = new OpenAI({ 
+  apiKey: process.env.OPENAI_API_KEY || "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" 
+});
 
-// Define exact structured output schema
+// ─── ZOD SCHEMAS ───
 const LineItemSchema = z.object({
   description: z.string().nullable(),
   hsn_code: z.string().nullable(),
@@ -38,15 +47,13 @@ const InvoiceSchema = z.object({
   line_items: z.array(LineItemSchema)
 });
 
+// ─── EXTRACTION LOGIC ───
 exports.parseInvoiceFile = async (filePath) => {
-  // 1. Read and extract raw text from the uploaded PDF
+  // 1. Read and extract raw text safely
   const dataBuffer = fs.readFileSync(filePath);
-  
-  // Now this will not throw "is not a function"
-  const data = await pdfParse(dataBuffer); 
-  const text = data.text;
+  const text = await extractPdfText(dataBuffer);
 
-  // 2. Pass to OpenAI using strict JSON structured formats
+  // 2. Pass to OpenAI
   const completion = await openai.beta.chat.completions.parse({
     model: "gpt-4o-2024-08-06",
     temperature: 0,
