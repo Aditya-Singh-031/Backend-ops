@@ -26,18 +26,27 @@ app.use(
 // 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python (Port 8000)
 // This MUST be placed before express.json() so PDF file streams don't break
 // 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python (Port 8000)
+// ... (keep top imports and CORS)
+
+// 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python Docker (Port 8000)
+// Must be BEFORE express.json() so it doesn't corrupt PDF uploads
 app.use(
-  "/api/invoices", // Catch what the frontend is currently sending
+  "/api/invoices", 
   createProxyMiddleware({
     target: "http://127.0.0.1:8000",
     changeOrigin: true,
     pathRewrite: {
-      "^/api/invoices": "/api/v1/invoices", // Secretly add the 'v1' for Python
+      "^/api/invoices": "/api/v1/invoices", // Rewrites /api/invoices -> /api/v1/invoices for Docker
     },
+    onProxyReq: (proxyReq, req, res) => {
+       // Log to terminal so you can see traffic moving to Docker
+       console.log(`[Proxy] Forwarding ${req.method} ${req.url} to Python Docker...`);
+    }
   })
 );
 
-app.use(express.json({ limit: "50mb" })); // Make sure this stays BELOW the proxy
+app.use(express.json({ limit: "50mb" }));
+// ... (rest of your file)
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
