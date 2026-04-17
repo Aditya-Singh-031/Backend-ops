@@ -22,17 +22,19 @@ app.use(
     credentials: true,
   })
 );
-
-// 💥 Forward AI/Parsing routes to Python Docker (Port 8000)
+// 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python Docker (Port 8000)
 app.use(
   "/api/invoices", 
   createProxyMiddleware({
     target: "http://127.0.0.1:8000",
     changeOrigin: true,
-    pathRewrite: {
-      "^/api/invoices": "/api/v1/invoices",
+    pathRewrite: (path, req) => {
+      // req.url is the path AFTER Express strips the mount point (e.g., "/status/123" or "/upload")
+      // We manually build the exact path Python expects
+      return "/api/v1/invoices" + req.url;
     },
     onProxyRes: (proxyRes) => {
+      // Keep SSE connections alive through the proxy so the 0% progresses
       proxyRes.headers['connection'] = 'keep-alive';
       proxyRes.headers['cache-control'] = 'no-cache';
     }
