@@ -5,6 +5,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const { connectDb } = require("./config/db");
+const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
 
@@ -21,29 +22,24 @@ app.use(
     credentials: true,
   })
 );
-// ... (top of file)
-const { createProxyMiddleware } = require("http-proxy-middleware");
 
-// 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python Docker (Port 8000)
+// 💥 Forward AI/Parsing routes to Python Docker (Port 8000)
 app.use(
-  "/api/invoices",
+  "/api/invoices", 
   createProxyMiddleware({
     target: "http://127.0.0.1:8000",
     changeOrigin: true,
-    // THE FIX: Strict Dictionary Rewrite
     pathRewrite: {
       "^/api/invoices": "/api/v1/invoices",
     },
     onProxyRes: (proxyRes) => {
-      // Keep SSE connections alive through the proxy
       proxyRes.headers['connection'] = 'keep-alive';
       proxyRes.headers['cache-control'] = 'no-cache';
     }
   })
 );
 
-app.use(express.json({ limit: "50mb" }));
-// ... (rest of file)
+app.use(express.json({ limit: "50mb" })); 
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
