@@ -5,7 +5,8 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const { connectDb } = require("./config/db");
-
+// ... (top of file)
+const { createProxyMiddleware } = require("http-proxy-middleware");
 const app = express();
 
 const allowedOrigins = process.env.CORS_ORIGINS
@@ -21,26 +22,20 @@ app.use(
     credentials: true,
   })
 );
-// ... (top of file)
-const { createProxyMiddleware } = require("http-proxy-middleware");
-
-// 💥 Forward AI/Parsing routes to Python Docker (Port 8000)
+// 💥 Forward AI/Parsing routes to Python Docker
 app.use(
   "/api/invoices",
   createProxyMiddleware({
-    target: "http://127.0.0.1:8000",
+    // THE FIX: Put the full Python base path right here in the target.
+    // Express hands us "/status/123", proxy appends it to this target.
+    // Result: http://127.0.0.1:8000/api/v1/invoices/status/123
+    target: "http://127.0.0.1:8000/api/v1/invoices",
     changeOrigin: true,
-    // THE FIX: Use a simple string dictionary. This tells the proxy:
-    // "Whatever is handed to me, prepend /api/v1/invoices to it."
-    pathRewrite: {
-      "^/api/invoices": "/api/v1/invoices"
-    },
     onProxyRes: (proxyRes) => {
       // Keep SSE connections alive through the proxy
       proxyRes.headers['connection'] = 'keep-alive';
       proxyRes.headers['cache-control'] = 'no-cache';
     },
-    // Optional: Log errors if the proxy fails to connect to Python
     onError: (err, req, res) => {
       console.error("Proxy Error:", err);
       res.writeHead(500, { 'Content-Type': 'text/plain' });
