@@ -5,7 +5,6 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const { connectDb } = require("./config/db");
-const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
 
@@ -22,26 +21,31 @@ app.use(
     credentials: true,
   })
 );
+// ... (top of file)
+const { createProxyMiddleware } = require("http-proxy-middleware");
+
 // 💥 THE MAGIC TRICK: Forward AI/Parsing routes to Python Docker (Port 8000)
 app.use(
-  "/api/invoices", 
+  "/api/invoices",
   createProxyMiddleware({
     target: "http://127.0.0.1:8000",
     changeOrigin: true,
+    // THE FIX: Use a function to cleanly prepend '/api/v1' to whatever path comes in
     pathRewrite: (path, req) => {
-      // req.url is the path AFTER Express strips the mount point (e.g., "/status/123" or "/upload")
-      // We manually build the exact path Python expects
-      return "/api/v1/invoices" + req.url;
+      // Example: path is "/api/invoices/1234-5678"
+      // We want to return "/api/v1/invoices/1234-5678"
+      return path.replace(/^\/api\/invoices/, '/api/v1/invoices');
     },
     onProxyRes: (proxyRes) => {
-      // Keep SSE connections alive through the proxy so the 0% progresses
+      // Keep SSE connections alive through the proxy
       proxyRes.headers['connection'] = 'keep-alive';
       proxyRes.headers['cache-control'] = 'no-cache';
     }
   })
 );
 
-app.use(express.json({ limit: "50mb" })); 
+// Body parsers MUST stay below the proxy!
+app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
