@@ -22,25 +22,28 @@ app.use(
     credentials: true,
   })
 );
+
 // 💥 Forward AI/Parsing routes to Python Docker
 app.use(
   "/api/invoices",
   createProxyMiddleware({
-    // THE FIX: Put the full Python base path right here in the target.
-    // Express hands us "/status/123", proxy appends it to this target.
-    // Result: http://127.0.0.1:8000/api/v1/invoices/status/123
     target: "http://127.0.0.1:8000/api/v1/invoices",
     changeOrigin: true,
     onProxyRes: (proxyRes) => {
-      // Keep SSE connections alive through the proxy
       proxyRes.headers['connection'] = 'keep-alive';
       proxyRes.headers['cache-control'] = 'no-cache';
-    },
-    onError: (err, req, res) => {
-      console.error("Proxy Error:", err);
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('Proxy Error: Could not connect to Python backend.');
     }
+  })
+);
+
+// 💥 NEW: Forward PDF requests directly to Python's static file server
+app.use(
+  "/storage",
+  createProxyMiddleware({
+    target: "http://127.0.0.1:8000",
+    changeOrigin: true,
+    // Python serves files at http://127.0.0.1:8000/storage/...
+    // So if Node gets /storage/pdfs/file.pdf, it passes it exactly as-is.
   })
 );
 
