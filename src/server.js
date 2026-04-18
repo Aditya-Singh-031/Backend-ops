@@ -37,16 +37,21 @@ app.use(
   })
 );
 
-// 💥 Path B: Forward legacy PDF requests to Python Docker
+// 💥 NEW: Forward PDF requests directly to Python's static file server
 app.use(
   "/storage",
   createProxyMiddleware({
-    target: "http://127.0.0.1:8000",
+    // THE FIX: Explicitly append /storage to the target!
+    // Express strips it, so we add it back before sending to Docker.
+    target: "http://127.0.0.1:8000/storage",
     changeOrigin: true,
+    onError: (err, req, res) => {
+      console.error("PDF Proxy Error:", err);
+      res.status(500).send("Error fetching PDF from Python container.");
+    }
   })
 );
 
-// Body parsers MUST stay below the proxy!
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
