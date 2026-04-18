@@ -53,10 +53,10 @@ exports.list = async (req, res) => {
   const buyerIds = [...new Set(shipments.map((s) => s.buyer_id).filter(Boolean))];
   const buyerOids = buyerIds.map((id) => toObjectId(id)).filter(Boolean);
   const buyers = buyerOids.length > 0
-    ? await db.collection("companies").find({ _id: { $in: buyerOids } }).toArray()
+    ? await db.collection("buyers").find({ _id: { $in: buyerOids } }).toArray()
     : [];
   const buyerMap = {};
-  buyers.forEach((b) => (buyerMap[b._id.toString()] = b));
+  buyers.forEach((b) => (buyerMap[b._id.toString()] = { ...b, name: b.cust_name || b.name }));
 
   const shipmentIds = shipments.map((s) => s._id);
   const qtAgg = await db
@@ -94,12 +94,12 @@ exports.getById = async (req, res) => {
   if (!shipment) return sendError(res, "Not Found", 404);
 
   if (shipment.buyer_id) {
-    const buyer = await db.collection("companies").findOne({ _id: toObjectId(shipment.buyer_id) });
-    if (buyer) shipment.buyer_id = buyer;
+    const buyer = await db.collection("buyers").findOne({ _id: toObjectId(shipment.buyer_id) });
+    if (buyer) { buyer.name = buyer.cust_name || buyer.name; shipment.buyer_id = buyer; }
   }
   if (shipment.consignee_id) {
-    const consignee = await db.collection("companies").findOne({ _id: toObjectId(shipment.consignee_id) });
-    if (consignee) shipment.consignee_id = consignee;
+    const consignee = await db.collection("buyers").findOne({ _id: toObjectId(shipment.consignee_id) });
+    if (consignee) { consignee.name = consignee.cust_name || consignee.name; shipment.consignee_id = consignee; }
   }
 
   const details = await db.collection("shipment_details").find({ shipment_id: oid }).toArray();
@@ -140,7 +140,7 @@ exports.quickCreate = async (req, res) => {
   doc._id = result.insertedId;
 
   if (doc.buyer_id) {
-    const buyer = await db.collection("companies").findOne({ _id: doc.buyer_id });
+    const buyer = await db.collection("buyers").findOne({ _id: doc.buyer_id });
     if (buyer) doc.buyer_name = buyer.name || buyer.cust_name || "";
   }
   return res.status(201).json({ data: doc });

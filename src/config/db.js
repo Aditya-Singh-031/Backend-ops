@@ -5,7 +5,7 @@ if (!uri) {
   throw new Error("MONGO_URI environment variable is required");
 }
 
-const DB_NAME = process.env.MONGO_DB || "morsebiz-ops-prod";
+const DB_NAME = process.env.MONGO_DB || "morsebiz-ops-prod-prod";
 
 let _client = null;
 let _connectPromise = null;

@@ -148,6 +148,13 @@ exports.update = async (req, res) => {
   if (notes !== undefined) update.notes = notes;
   if (status) update.status = status;
 
+  // Support linked_order_id — accepts null to unlink
+  if (Object.prototype.hasOwnProperty.call(req.body, "linked_order_id")) {
+    update.linked_order_id = req.body.linked_order_id
+      ? toObjectId(req.body.linked_order_id)
+      : null;
+  }
+
   await db.collection("outwards").updateOne({ outward_id: id }, { $set: update });
   const updated = await db.collection("outwards").findOne({ outward_id: id });
   sendSuccess(res, updated);
@@ -204,9 +211,56 @@ exports.removeBox = async (req, res) => {
   sendSuccess(res, updated);
 };
 
+exports.getOutwardBuyerOrders = async (req, res) => {
+  const { id } = req.params;
+  const db = await getDb();
+
+  // Step 1: Fetch the outward record
+  const outward = await db.collection("outwards").findOne({ outward_id: id });
+  if (!outward) return sendError(res, "Outward not found", 404);
+
+  // Step 2: Fetch the linked shipment to resolve buyer_id
+  if (!outward.shipment_id) return sendError(res, "Outward has no linked shipment", 400);
+  const shipment = await db.collection("shipments").findOne({ _id: toObjectId(outward.shipment_id) });
+  if (!shipment) return sendError(res, "Linked shipment not found", 404);
+
+  // Step 3: Fetch the buyer from the shipment
+  const buyerId = shipment.buyer_id;
+  if (!buyerId) return sendError(res, "Shipment has no buyer linked", 400);
+  const buyer = await db.collection("buyers").findOne({ _id: toObjectId(buyerId) });
+
+  // Step 4: Fetch all PENDING and CONFIRMED orders belonging to this buyer
+  const orders = await db
+    .collection("orders")
+    .find({
+      buyer_id: toObjectId(buyerId),
+      status: { $in: ["PENDING", "CONFIRMED"] },
+      is_deleted: { $ne: true },
+    })
+    .sort({ created_at: -1 })
+    .toArray();
+
+  sendSuccess(res, {
+    outward,
+    shipment: {
+      _id: shipment._id,
+      invoice_number: shipment.invoice_number,
+      buyer_id: buyerId,
+    },
+    buyer: buyer
+      ? {
+          _id: buyer._id,
+          cust_name: buyer.cust_name || buyer.name || "Unknown",
+          currency: buyer.currency || "",
+        }
+      : null,
+    orders,
+  });
+};
+
 exports.buyersList = async (_req, res) => {
   const db = await getDb();
-  const buyers = await db.collection("companies").find({ is_deleted: { $ne: true } }).sort({ name: 1 }).toArray();
+  const buyers = await db.collection("buyers").find({ is_deleted: { $ne: true } }).sort({ cust_name: 1 }).toArray();
 
   const normalized = buyers.map((b) => ({
     _id: b._id,
