@@ -5,7 +5,6 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const { connectDb } = require("./config/db");
-// ... (top of file)
 const { createProxyMiddleware } = require("http-proxy-middleware");
 const app = express();
 
@@ -23,12 +22,14 @@ app.use(
   })
 );
 
-// 💥 Forward AI/Parsing routes to Python Docker
 app.use(
   "/api/invoices",
   createProxyMiddleware({
-    target: "http://127.0.0.1:8000/api/v1/invoices",
+    target: "http://127.0.0.1:8000",
     changeOrigin: true,
+    pathRewrite: {
+      "^/api/invoices": "/api/v1/invoices"
+    },
     onProxyRes: (proxyRes) => {
       proxyRes.headers['connection'] = 'keep-alive';
       proxyRes.headers['cache-control'] = 'no-cache';
@@ -36,20 +37,17 @@ app.use(
   })
 );
 
-// 💥 NEW: Forward PDF requests directly to Python's static file server
+// 💥 Path B: Forward legacy PDF requests to Python Docker
 app.use(
   "/storage",
   createProxyMiddleware({
     target: "http://127.0.0.1:8000",
     changeOrigin: true,
-    // Python serves files at http://127.0.0.1:8000/storage/...
-    // So if Node gets /storage/pdfs/file.pdf, it passes it exactly as-is.
   })
 );
 
 // Body parsers MUST stay below the proxy!
 app.use(express.json({ limit: "50mb" }));
-// ... (rest of file)
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
