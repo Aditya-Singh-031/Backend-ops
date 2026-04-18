@@ -7,5 +7,7 @@ router.use(authMiddleware);
 
 router.get("/brands", asyncHandler(ctrl.getBrands));
 router.post("/brands", asyncHandler(ctrl.createBrand));
+// 💥 NEW: Route to handle editing brands
+router.put("/brands/:id", asyncHandler(ctrl.updateBrand)); 
 
 module.exports = router;
