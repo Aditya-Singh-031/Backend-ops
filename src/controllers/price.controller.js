@@ -3,16 +3,20 @@ const { sendSuccess } = require("../utils/response");
 const { ObjectId } = require("mongodb");
 
 exports.getBrands = async (req, res) => {
-  const db = getDb();
+  // 💥 THE FIX: Added 'await' here
+  const db = await getDb(); 
+  
   // Fetch all brands, sorted alphabetically
   const brands = await db.collection("brands").find().sort({ name: 1 }).toArray();
+  
   // Map _id to id for the frontend
   const formattedBrands = brands.map(b => ({ ...b, id: b._id.toString() }));
   sendSuccess(res, formattedBrands);
 };
 
 exports.createBrand = async (req, res) => {
-  const db = getDb();
+  // 💥 THE FIX: Added 'await' here
+  const db = await getDb(); 
   const { name, vendor_notes } = req.body;
   
   const newBrand = {
@@ -27,7 +31,8 @@ exports.createBrand = async (req, res) => {
 };
 
 exports.updateBrand = async (req, res) => {
-  const db = getDb();
+  // 💥 THE FIX: Added 'await' here
+  const db = await getDb(); 
   const { id } = req.params;
   const { name, vendor_notes } = req.body;
 
