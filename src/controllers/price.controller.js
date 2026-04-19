@@ -48,3 +48,25 @@ exports.updateBrand = async (req, res) => {
 
   sendSuccess(res, { id, name, vendor_notes });
 };
+
+// ... keep getBrands, createBrand, updateBrand as they are ...
+
+// 💥 NEW: Handle the logo file and update MongoDB
+exports.uploadLogo = async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: "No image file uploaded" });
+  }
+  
+  const db = await getDb();
+  const { id } = req.params;
+  
+  // The URL path that the frontend will use to fetch the image
+  const logo_url = `/uploads/brands/${req.file.filename}`;
+
+  await db.collection("brands").updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { logo_url: logo_url, updated_at: new Date() } }
+  );
+
+  sendSuccess(res, { id, logo_url });
+};
