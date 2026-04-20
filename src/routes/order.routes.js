@@ -14,6 +14,7 @@ router.use(authMiddleware);
 router.get("/bank-accounts", asyncHandler(ctrl.getBankAccounts));
 router.get("/", asyncHandler(ctrl.list));
 router.post("/", validate(createOrderSchema), asyncHandler(ctrl.create));
+router.get("/download-template", asyncHandler(ctrl.downloadTemplate));
 router.get("/:id", asyncHandler(ctrl.getById));
 router.put("/:id", validate(updateOrderSchema), asyncHandler(ctrl.update));
 router.patch("/:id/status", validate(updateStatusSchema), asyncHandler(ctrl.updateStatus));

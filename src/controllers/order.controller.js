@@ -416,6 +416,14 @@ exports.downloadPdf = async (req, res) => {
   }
 };
 
+exports.downloadTemplate = async (req, res) => {
+  const filePath = path.join(__dirname, "../assets/PI_Upload_Sample.xlsx");
+  if (!fs.existsSync(filePath)) {
+    return sendError(res, "Template file not found", 404);
+  }
+  res.download(filePath, "PI_Upload_Sample.xlsx");
+};
+
 exports.uploadExcel = async (req, res) => {
   if (!req.file) return sendError(res, "No file uploaded", 400);
   try {
