@@ -6,13 +6,12 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-// Ensure the brand uploads directory exists
-const uploadDir = path.join(__dirname, "../../uploads/brands");
+// 💥 THE FIX: Point to the new storage/uploads/brands directory
+const uploadDir = path.join(__dirname, "../../storage/uploads/brands");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Configure Multer to save images securely
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, uploadDir);
@@ -30,7 +29,7 @@ router.get("/brands", asyncHandler(ctrl.getBrands));
 router.post("/brands", asyncHandler(ctrl.createBrand));
 router.put("/brands/:id", asyncHandler(ctrl.updateBrand));
 
-// 💥 NEW: Route specifically for uploading the logo
+// Route specifically for uploading the logo
 router.post("/brands/:id/logo", upload.single("logo"), asyncHandler(ctrl.uploadLogo));
 
 module.exports = router;

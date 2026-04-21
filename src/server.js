@@ -64,7 +64,8 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
-app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+// 💥 Point the /uploads URL to the new physical storage/uploads folder
+app.use("/uploads", express.static(path.join(__dirname, "..", "storage", "uploads")));
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
