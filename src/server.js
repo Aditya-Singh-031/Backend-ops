@@ -65,7 +65,8 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
 // 💥 Point the /uploads URL to the new physical storage/uploads folder
-app.use("/uploads", express.static(path.join(__dirname, "..", "storage", "uploads")));
+// 💥 THE FIX: Add /api to the front so Nginx lets the request through to Node
+app.use("/api/uploads", express.static(path.join(__dirname, "..", "storage", "uploads")));
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
