@@ -35,7 +35,9 @@ router.post("/brands", asyncHandler(ctrl.createBrand));
 router.put("/brands/:id", asyncHandler(ctrl.updateBrand));
 router.post("/brands/:id/logo", uploadLogo.single("logo"), asyncHandler(ctrl.uploadLogo));
 
-// 💥 THE FIX: The missing Price List Routes!
+// 💥 NEW: Route to fetch parts for the frontend popup table
+router.get("/brands/:id/parts", asyncHandler(ctrl.getBrandParts));
+
 router.post("/price-list/upload", uploadExcel.single("file"), asyncHandler(ctrl.uploadPriceList));
 router.post("/price-list/download", asyncHandler(ctrl.downloadPriceList));
 

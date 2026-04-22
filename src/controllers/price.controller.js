@@ -66,16 +66,39 @@ exports.uploadLogo = async (req, res) => {
 
   sendSuccess(res, { id, logo_url });
 };
-// ... (Keep your existing getBrands, createBrand, updateBrand, and uploadLogo code at the top!)
+// ... (Keep your getBrands, createBrand, updateBrand, and uploadLogo at the top)
 
 const xlsx = require("xlsx");
 const fs = require("fs");
 
-// 💥 NEW: Parse Uploaded Excel and Save to MongoDB
+// 💥 NEW: Fetch Parts for the Catalog Viewer Popup
+exports.getBrandParts = async (req, res) => {
+  const db = await getDb();
+  const { id } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = 50; // Show 50 parts per page
+  const skip = (page - 1) * limit;
+
+  const parts = await db.collection("parts")
+    .find({ brand_id: new ObjectId(id) })
+    .sort({ part_number_clean: 1 })
+    .skip(skip)
+    .limit(limit)
+    .toArray();
+
+  const total = await db.collection("parts").countDocuments({ brand_id: new ObjectId(id) });
+
+  sendSuccess(res, { 
+    parts, 
+    total, 
+    page, 
+    totalPages: Math.ceil(total / limit) 
+  });
+};
+
+// 💥 OPTIMIZED: Parse Uploaded Excel (Chunks to prevent 502 Crash)
 exports.uploadPriceList = async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ success: false, error: "No Excel file uploaded" });
-  }
+  if (!req.file) return res.status(400).json({ success: false, error: "No Excel file uploaded" });
   
   try {
     const brand_id = req.body.brand_id;
@@ -83,31 +106,25 @@ exports.uploadPriceList = async (req, res) => {
 
     const db = await getDb();
     
-    // Read the Excel file
     const workbook = xlsx.readFile(req.file.path);
     const sheetName = workbook.SheetNames[0];
     const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-    const bulkOps = [];
+    let bulkOps = [];
     let validRows = 0;
 
-    // Loop through every row in the Excel sheet
     for (const row of data) {
-      // Flexibly find column names based on your sample files
       const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"];
       const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"];
       const descRaw = row["Description"] || row["Desc"] || "";
 
-      // Skip rows with missing critical data
       if (!partRaw || mrpRaw === undefined) continue;
 
-      // Rule: Remove all spaces and normalize
       const cleanPart = String(partRaw).replace(/\s+/g, "").toUpperCase();
       const mrp = parseFloat(mrpRaw);
 
       if (isNaN(mrp)) continue;
 
-      // Upsert: Update if exists, Insert if new
       bulkOps.push({
         updateOne: {
           filter: { brand_id: new ObjectId(brand_id), part_number_clean: cleanPart },
@@ -123,14 +140,20 @@ exports.uploadPriceList = async (req, res) => {
         }
       });
       validRows++;
+
+      // 💥 THE FIX: If we hit 1,000 operations, execute them and clear the array.
+      // This prevents memory spikes and 502 Gateway Timeouts.
+      if (bulkOps.length >= 1000) {
+        await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
+        bulkOps = []; 
+      }
     }
 
-    // Execute bulk write to MongoDB efficiently
+    // Process any remaining operations
     if (bulkOps.length > 0) {
       await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
     }
 
-    // Update Brand SKU Count
     const totalParts = await db.collection("parts").countDocuments({ brand_id: new ObjectId(brand_id) });
     const updatedBrand = await db.collection("brands").findOneAndUpdate(
       { _id: new ObjectId(brand_id) },
@@ -138,7 +161,6 @@ exports.uploadPriceList = async (req, res) => {
       { returnDocument: "after" }
     );
 
-    // Delete temp Excel file
     fs.unlinkSync(req.file.path);
 
     sendSuccess(res, { 
@@ -151,6 +173,8 @@ exports.uploadPriceList = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+// ... (Keep your downloadPriceList function exactly as it is)
 
 // 💥 NEW: Apply Formula and Generate Excel for Download
 exports.downloadPriceList = async (req, res) => {
