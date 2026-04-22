@@ -96,7 +96,10 @@ exports.getBrandParts = async (req, res) => {
   });
 };
 
-// 💥 OPTIMIZED: Parse Uploaded Excel (Chunks to prevent 502 Crash)
+const xlsx = require("xlsx");
+const fs = require("fs");
+
+// 💥 OPTIMIZED: Safe-Memory Parsing for Massive Excel Files
 exports.uploadPriceList = async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, error: "No Excel file uploaded" });
   
@@ -106,22 +109,33 @@ exports.uploadPriceList = async (req, res) => {
 
     const db = await getDb();
     
-    const workbook = xlsx.readFile(req.file.path);
+    // 💥 MEMORY FIX: Strip out heavy styles, HTML, and formulas
+    const workbook = xlsx.readFile(req.file.path, { 
+        cellDates: true, 
+        cellFormula: false, 
+        cellHTML: false, 
+        cellStyles: false 
+    });
+    
     const sheetName = workbook.SheetNames[0];
-    const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
 
     let bulkOps = [];
     let validRows = 0;
 
     for (const row of data) {
-      const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"];
-      const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"];
-      const descRaw = row["Description"] || row["Desc"] || "";
+      // Flexibly match column names from your specific CSVs/Excels
+      const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"] || row["Part No."];
+      const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"] || row["Base MRP"];
+      const descRaw = row["Description"] || row["Desc"] || row["Part Name"] || "";
 
-      if (!partRaw || mrpRaw === undefined) continue;
+      if (!partRaw || mrpRaw === undefined || mrpRaw === "") continue;
 
+      // Rule: Remove all spaces and normalize
       const cleanPart = String(partRaw).replace(/\s+/g, "").toUpperCase();
-      const mrp = parseFloat(mrpRaw);
+      
+      // Safely parse numbers (handles cases where MRP is formatted like "1,200.50")
+      const mrp = parseFloat(String(mrpRaw).replace(/,/g, ""));
 
       if (isNaN(mrp)) continue;
 
@@ -141,9 +155,8 @@ exports.uploadPriceList = async (req, res) => {
       });
       validRows++;
 
-      // 💥 THE FIX: If we hit 1,000 operations, execute them and clear the array.
-      // This prevents memory spikes and 502 Gateway Timeouts.
-      if (bulkOps.length >= 1000) {
+      // 💥 THE FIX: Execute in chunks of 500 to prevent RAM spikes and 502 Crashes
+      if (bulkOps.length >= 500) {
         await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
         bulkOps = []; 
       }
@@ -154,18 +167,21 @@ exports.uploadPriceList = async (req, res) => {
       await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
     }
 
+    // Safely update the brand SKU count (Bypasses findOneAndUpdate driver version bugs)
     const totalParts = await db.collection("parts").countDocuments({ brand_id: new ObjectId(brand_id) });
-    const updatedBrand = await db.collection("brands").findOneAndUpdate(
+    
+    await db.collection("brands").updateOne(
       { _id: new ObjectId(brand_id) },
-      { $set: { total_parts: totalParts } },
-      { returnDocument: "after" }
+      { $set: { total_parts: totalParts } }
     );
+    const finalBrand = await db.collection("brands").findOne({ _id: new ObjectId(brand_id) });
 
-    fs.unlinkSync(req.file.path);
+    // Clean up temp file
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
 
     sendSuccess(res, { 
       message: `Successfully mapped ${validRows} parts!`,
-      brand: { ...updatedBrand, id: updatedBrand._id.toString() }
+      brand: { ...finalBrand, id: finalBrand._id.toString() }
     });
 
   } catch (err) {
@@ -173,8 +189,6 @@ exports.uploadPriceList = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
-// ... (Keep your downloadPriceList function exactly as it is)
 
 // 💥 NEW: Apply Formula and Generate Excel for Download
 exports.downloadPriceList = async (req, res) => {
