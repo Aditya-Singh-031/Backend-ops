@@ -57,7 +57,7 @@ exports.uploadLogo = async (req, res) => {
   const { id } = req.params;
   
   // 💥 THE FIX: Add /api to the front of the URL saved in the database
-  const logo_url = `/api/storage/uploads/brands/${req.file.filename}`;
+  const logo_url = `/api/uploads/brands/${req.file.filename}`;
 
   await db.collection("brands").updateOne(
     { _id: new ObjectId(id) },
