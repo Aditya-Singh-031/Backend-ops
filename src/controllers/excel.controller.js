@@ -121,3 +121,55 @@ exports.downloadPriceList = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+// 💥 NEW: Streaming JSON Handler (Bypasses Nginx file limits entirely)
+exports.uploadPriceListStream = async (req, res) => {
+  try {
+    const { brand_id, partsChunk, isFinal } = req.body;
+    
+    if (!brand_id || !Array.isArray(partsChunk)) {
+      return res.status(400).json({ success: false, error: "Invalid payload stream" });
+    }
+
+    const db = await getDb();
+    let bulkOps = [];
+    let validRows = 0;
+
+    for (const row of partsChunk) {
+      // Flexibly match columns
+      const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"] || row["Part No."];
+      const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"] || row["Base MRP"];
+      const descRaw = row["Description"] || row["Desc"] || row["Part Name"] || "";
+
+      if (!partRaw || mrpRaw === undefined || mrpRaw === "") continue;
+
+      const cleanPart = String(partRaw).replace(/\s+/g, "").toUpperCase();
+      const mrp = parseFloat(String(mrpRaw).replace(/,/g, ""));
+      if (isNaN(mrp)) continue;
+
+      bulkOps.push({
+        updateOne: {
+          filter: { brand_id: new ObjectId(brand_id), part_number_clean: cleanPart },
+          update: { $set: { part_number_original: String(partRaw), description: String(descRaw), mrp: mrp, updated_at: new Date() } },
+          upsert: true
+        }
+      });
+      validRows++;
+    }
+
+    if (bulkOps.length > 0) {
+      await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
+    }
+
+    let finalBrand = null;
+    // Only update the heavy counting logic on the very last chunk!
+    if (isFinal) {
+       const totalParts = await db.collection("parts").countDocuments({ brand_id: new ObjectId(brand_id) });
+       await db.collection("brands").updateOne({ _id: new ObjectId(brand_id) }, { $set: { total_parts: totalParts } });
+       finalBrand = await db.collection("brands").findOne({ _id: new ObjectId(brand_id) });
+    }
+
+    sendSuccess(res, { mapped: validRows, brand: finalBrand ? { ...finalBrand, id: finalBrand._id.toString() } : null });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};

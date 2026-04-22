@@ -40,5 +40,6 @@ router.post("/brands/:id/logo", uploadLogo.single("logo"), asyncHandler(brandCtr
 router.get("/brands/:id/parts", asyncHandler(excelCtrl.getBrandParts));
 router.post("/price-list/upload", uploadExcel.single("file"), asyncHandler(excelCtrl.uploadPriceList));
 router.post("/price-list/download", asyncHandler(excelCtrl.downloadPriceList));
-
+// 💥 NEW: Pure JSON streaming route
+router.post("/price-list/stream", asyncHandler(excelCtrl.uploadPriceListStream));
 module.exports = router;
