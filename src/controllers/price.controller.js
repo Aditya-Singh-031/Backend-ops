@@ -95,7 +95,6 @@ exports.getBrandParts = async (req, res) => {
     totalPages: Math.ceil(total / limit) 
   });
 };
-
 const xlsx = require("xlsx");
 const fs = require("fs");
 
