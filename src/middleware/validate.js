@@ -1,4 +1,5 @@
 const { ZodError } = require("zod");
+const { sendError } = require("../utils/response");
 
 /**
  * Zod validation middleware factory.
@@ -13,11 +14,12 @@ function validate(schema, source = "body") {
     } catch (err) {
       if (err instanceof ZodError) {
         const messages = err.errors.map((e) => `${e.path.join(".")}: ${e.message}`);
-        return res.status(400).json({ success: false, error: messages.join(", ") });
+        return sendError(res, messages.join(", "), 400);
       }
       next(err);
     }
   };
 }
+
 
 module.exports = { validate };

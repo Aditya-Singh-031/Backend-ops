@@ -11,6 +11,10 @@ async function extractPdfText(buffer) {
     return (await rawPdfParse(buffer)).text;
   } else if (rawPdfParse && typeof rawPdfParse.default === "function") {
     return (await rawPdfParse.default(buffer)).text;
+  } else if (rawPdfParse && typeof rawPdfParse.PDFParse === "function") {
+    const parser = new rawPdfParse.PDFParse({ data: buffer });
+    await parser.load();
+    return await parser.getText();
   } else {
     console.error("Unrecognized pdf-parse export:", rawPdfParse);
     throw new Error("PDF Library failed to load as a function. Format unrecognized.");
@@ -147,7 +151,7 @@ exports.parseInvoiceFile = async (filePath) => {
   const text = await extractPdfText(dataBuffer);
 
   // 2. Pass to OpenAI
-  const completion = await openai.beta.chat.completions.parse({
+  const completion = await openai.chat.completions.parse({
     model: "gpt-4o-2024-08-06",
     temperature: 0,
     response_format: zodResponseFormat(InvoiceSchema, "invoice_extraction"),

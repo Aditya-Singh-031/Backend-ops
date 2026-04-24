@@ -1,3 +1,5 @@
+const { sendSuccess } = require("../utils/response");
+
 const MOCK_SKUS = [
   "06A103011BH", "06A103011BT", "06A103011CA", "06A103113C",
   "06B103011AG", "06B103011AL", "06B103113F", "06B103171E",
@@ -34,5 +36,6 @@ exports.list = (req, res) => {
   let results = MOCK_SKUS;
   if (search) results = MOCK_SKUS.filter((s) => s.toLowerCase().includes(search));
 
-  return res.json({ success: true, data: results.slice(0, limit), count: results.length, _mock: true });
+  return sendSuccess(res, results.slice(0, limit));
 };
+

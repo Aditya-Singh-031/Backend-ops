@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
+const { sendError } = require("../utils/response");
 
-const JWT_SECRET = process.env.JWT_SECRET || "morsebiz_secret_key_123";
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "1d";
 
 function extractToken(req) {
@@ -13,15 +14,16 @@ function extractToken(req) {
 function authMiddleware(req, res, next) {
   const token = extractToken(req);
   if (!token) {
-    return res.status(401).json({ success: false, error: "Authentication required" });
+    return sendError(res, "Authentication required", 401);
   }
   try {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
-    return res.status(401).json({ success: false, error: "Invalid or expired token" });
+    return sendError(res, "Invalid or expired token", 401);
   }
 }
+
 
 function generateToken(user) {
   return jwt.sign(

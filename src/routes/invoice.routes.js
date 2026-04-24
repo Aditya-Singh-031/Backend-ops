@@ -11,6 +11,7 @@ router.use(authMiddleware);
 
 router.post("/upload", upload.array("files", 20), ctrl.uploadInvoices);
 router.get("/status/:job_id", ctrl.getJobStatus);
+router.get("/status-json/:job_id", ctrl.getJobStatusJson);
 router.get("/download/:job_id", ctrl.downloadExcel);
 
 module.exports = router;

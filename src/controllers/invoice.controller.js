@@ -3,13 +3,14 @@ const { getDb } = require("../config/db");
 const aiService = require("../services/ai.service");
 const fs = require("fs");
 const ExcelJS = require("exceljs");
+const { sendSuccess, sendError } = require("../utils/response");
 
 // In-memory job tracker (replaces Redis for immediate frontend feedback)
 const activeJobs = new Map();
 
 exports.uploadInvoices = async (req, res) => {
   const files = req.files;
-  if (!files || files.length === 0) return res.status(400).json({ error: "No files uploaded" });
+  if (!files || files.length === 0) return sendError(res, "No files uploaded", 400);
 
   const jobId = uuidv4();
   const jobData = {
@@ -29,14 +30,17 @@ exports.uploadInvoices = async (req, res) => {
 
   activeJobs.set(jobId, jobData);
   
-  // Respond instantly so UI shows "Processing..."
-  res.json({ job_id: jobId, message: "Processing started", total_files: files.length });
-
   // Process in background
-  processJobBackground(jobId, files).catch(console.error);
+  processJobBackground(jobId, files).catch(err => {
+    console.error(`[Job ${jobId}] Critical background error:`, err);
+  });
+
+  // Respond instantly so UI shows "Processing..."
+  return sendSuccess(res, { job_id: jobId, message: "Processing started", total_files: files.length });
 };
 
 async function processJobBackground(jobId, files) {
+  console.log(`\n[Job ${jobId}] 🚀 BACKGROUND PROCESSING STARTED (${files.length} files)`);
   const job = activeJobs.get(jobId);
   const db = await getDb();
 
@@ -44,21 +48,37 @@ async function processJobBackground(jobId, files) {
     const file = files[i];
     const pdfEntry = job.pdfs[String(i)];
     
+    console.log(`[Job ${jobId}] 📄 [${i + 1}/${files.length}] Processing: ${file.originalname}`);
+
+    // Stage 1: Reading PDF
     pdfEntry.status = "parsing";
-    pdfEntry.message = "AI Extracting data...";
+    pdfEntry.message = "Reading PDF...";
+    pdfEntry.progress = 20;
     activeJobs.set(jobId, job);
 
     try {
-      // 1. Extract via OpenAI
+      // Stage 2: AI Extracting
+      console.log(`[Job ${jobId}] 🤖 [${i + 1}/${files.length}] AI Extracting...`);
+      pdfEntry.status = "extracting";
+      pdfEntry.message = "AI Extracting data...";
+      pdfEntry.progress = 50;
+      activeJobs.set(jobId, job);
+
       const parsedData = await aiService.parseInvoiceFile(file.path);
-      
-      // 2. Save Invoice to DB
-      const invoiceIdStr = uuidv4(); 
+      console.log(`[Job ${jobId}] ✅ [${i + 1}/${files.length}] AI Extraction Successful`);
+
+      // Stage 3: Saving to DB
+      console.log(`[Job ${jobId}] 💾 [${i + 1}/${files.length}] Saving to DB...`);
+      pdfEntry.status = "saving";
+      pdfEntry.message = "Saving to database...";
+      pdfEntry.progress = 80;
+      activeJobs.set(jobId, job);
+
+      const invoiceIdStr = uuidv4();
       const invoiceDoc = {
-        invoice_id: invoiceIdStr,
         job_id: jobId,
-        pdf_url: `/uploads/${file.filename}`, 
-        
+        invoice_id: invoiceIdStr,
+        pdf_url: `/uploads/${file.filename}`, // Using file.filename (multer generated)
         invoice_metadata: parsedData.invoice_metadata || {},
         seller: parsedData.seller || {},
         buyer: parsedData.buyer || {},
@@ -68,34 +88,39 @@ async function processJobBackground(jobId, files) {
         payments: parsedData.payments || [],
         shipping: parsedData.shipping || {},
         document_info: parsedData.document_info || {},
-        
         po_id: null,
         created_at: new Date()
       };
       await db.collection("invoices").insertOne(invoiceDoc);
 
-      // 3. Save Line Items to DB
       if (parsedData.line_items && parsedData.line_items.length > 0) {
         const itemsToInsert = parsedData.line_items.map((item, index) => ({
+          ...item,
+          line_item_id: uuidv4(),
           invoice_id: invoiceIdStr,
           job_id: jobId,
-          line_number: index + 1,
-          ...item
+          line_number: index + 1
         }));
         await db.collection("invoice_line_items").insertMany(itemsToInsert);
+        console.log(`[Job ${jobId}] 📦 [${i + 1}/${files.length}] Saved ${itemsToInsert.length} line items`);
       }
 
-      // 4. Update Status
+      // Stage 4: Done
       pdfEntry.status = "completed";
       pdfEntry.message = "Successfully parsed";
+      pdfEntry.progress = 100;
+      pdfEntry.invoice_id = invoiceIdStr;
       pdfEntry.line_items = parsedData.line_items?.length || 0;
       pdfEntry.total_amount = parsedData.totals?.invoice_amount || 0;
       job.completed_files += 1;
+      
+      console.log(`[Job ${jobId}] ✨ [${i + 1}/${files.length}] COMPLETED: ${invoiceIdStr}`);
 
     } catch (error) {
-      console.error(`File parsing error:`, error);
+      console.error(`[Job ${jobId}] ❌ [${i + 1}/${files.length}] FAILED:`, error);
       pdfEntry.status = "failed";
-      pdfEntry.error = error.message;
+      pdfEntry.message = error.message;
+      pdfEntry.progress = 100;
       job.failed_files += 1;
     }
 
@@ -105,6 +130,7 @@ async function processJobBackground(jobId, files) {
 
   job.status = "completed";
   activeJobs.set(jobId, job);
+  console.log(`[Job ${jobId}] 🏁 ALL FILES PROCESSED. Success: ${job.completed_files}, Failed: ${job.failed_files}\n`);
 }
 
 exports.getJobStatus = (req, res) => {
@@ -135,6 +161,14 @@ exports.getJobStatus = (req, res) => {
   req.on("close", () => clearInterval(interval));
 };
 
+// Simple JSON polling endpoint — no SSE, just returns current job state
+exports.getJobStatusJson = (req, res) => {
+  const jobId = req.params.job_id;
+  const job = activeJobs.get(jobId);
+  if (!job) return sendError(res, "Job not found", 404);
+  return sendSuccess(res, job);
+};
+
 exports.downloadExcel = async (req, res) => {
   try {
     const jobId = req.params.job_id;
@@ -144,7 +178,7 @@ exports.downloadExcel = async (req, res) => {
     const invoices = await db.collection("invoices").find({ job_id: jobId }).toArray();
     
     if (!invoices || invoices.length === 0) {
-      return res.status(404).json({ error: "No invoices found for this job." });
+      return sendError(res, "No invoices found for this job.", 404);
     }
     
     const lineItems = await db.collection("invoice_line_items").find({ job_id: jobId }).toArray();
@@ -314,6 +348,6 @@ exports.downloadExcel = async (req, res) => {
     
   } catch (err) {
     console.error("Error generating Excel:", err);
-    res.status(500).json({ error: "Failed to generate Excel file" });
+    return sendError(res, "Failed to generate Excel file");
   }
 };

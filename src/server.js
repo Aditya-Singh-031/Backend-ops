@@ -34,16 +34,19 @@ app.use(cookieParser());
 // 💥 THE FIX: Add /api to the front so Nginx lets the request through to Node
 app.use("/api/uploads", express.static(path.join(__dirname, "..", "storage", "uploads")));
 
+const { sendSuccess, sendError } = require("./utils/response");
+
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
+  return sendSuccess(res, { status: "ok", time: new Date().toISOString() });
 });
 
 app.use("/api", require("./routes"));
 
 app.use((err, _req, res, _next) => {
   console.error("Unhandled error:", err);
-  res.status(err.status || 500).json({ error: err.message });
+  return sendError(res, err.message, err.status || 500);
 });
+
 
 const PORT = process.env.PORT || 5003;
 

@@ -1,15 +1,17 @@
 const { v4: uuidv4 } = require("uuid");
 const XLSX = require("xlsx");
 const { getDb, getClient } = require("../config/db");
+const { sendSuccess, sendError } = require("../utils/response");
+
 
 exports.list = async (_req, res) => {
   try {
     const db = await getDb();
     const inwards = await db.collection("wh_inwards").find().sort({ inward_date: -1 }).toArray();
-    return res.json({ success: true, data: inwards });
+    return sendSuccess(res, inwards);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, error: err.message });
+    return sendError(res, err.message);
   }
 };
 
@@ -29,10 +31,10 @@ exports.create = async (req, res) => {
     };
 
     await db.collection("wh_inwards").insertOne(inward);
-    return res.status(201).json({ success: true, data: inward });
+    return sendSuccess(res, inward, 201);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, error: err.message });
+    return sendError(res, err.message);
   }
 };
 
@@ -40,10 +42,10 @@ exports.getById = async (req, res) => {
   try {
     const db = await getDb();
     const inward = await db.collection("wh_inwards").findOne({ inward_id: req.params.inwardId });
-    if (!inward) return res.status(404).json({ error: "Not found" });
-    return res.json({ success: true, data: inward });
+    if (!inward) return sendError(res, "Not found", 404);
+    return sendSuccess(res, inward);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return sendError(res, error.message);
   }
 };
 
@@ -54,15 +56,15 @@ exports.update = async (req, res) => {
     const { inwardId } = req.params;
 
     const inward = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    if (!inward) return res.status(404).json({ error: "Not found" });
+    if (!inward) return sendError(res, "Not found", 404);
 
     const canEdit = (inward.status === "In progress" && !inward.has_completed) || inward.status === "Reopened";
     if (!canEdit || inward.is_locked || inward.status === "Completed") {
-      return res.status(400).json({ error: "Inward is locked and cannot be edited" });
+      return sendError(res, "Inward is locked and cannot be edited", 400);
     }
 
     if (Object.prototype.hasOwnProperty.call(body, "status") || Object.prototype.hasOwnProperty.call(body, "is_locked")) {
-      return res.status(400).json({ error: "Status/lock changes are not allowed here" });
+      return sendError(res, "Status/lock changes are not allowed here", 400);
     }
 
     const update = {
@@ -74,9 +76,9 @@ exports.update = async (req, res) => {
     };
     await db.collection("wh_inwards").updateOne({ inward_id: inwardId }, { $set: update });
     const updated = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    return res.json({ success: true, data: updated });
+    return sendSuccess(res, updated);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return sendError(res, error.message);
   }
 };
 
@@ -84,18 +86,18 @@ exports.complete = async (req, res) => {
   const { inwardId } = req.params;
   try {
     const { userId } = req.body;
-    if (!userId) return res.status(400).json({ error: "userId is required" });
+    if (!userId) return sendError(res, "userId is required", 400);
 
     const db = await getDb();
     const client = await getClient();
 
     const inward = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    if (!inward) return res.status(404).json({ error: "Inward not found" });
+    if (!inward) return sendError(res, "Inward not found", 404);
 
     const isFirstComplete = inward.status === "In progress" && !inward.has_completed;
     const isRecomplete = inward.status === "Reopened" && inward.has_completed;
     if (!isFirstComplete && !isRecomplete) {
-      return res.status(400).json({ error: "Inward must be 'In progress' (first completion) or 'Reopened' (re-complete)" });
+      return sendError(res, "Inward must be 'In progress' (first completion) or 'Reopened' (re-complete)", 400);
     }
 
     const inwardDetails = await db.collection("wh_inward_details").find({ inward_id: inwardId }).toArray();
@@ -369,15 +371,15 @@ exports.complete = async (req, res) => {
       if (session) await session.endSession();
     }
 
-    return res.json({
-      success: true, message: "Inward completed. Inventory synchronized.",
+    return sendSuccess(res, {
+      message: "Inward completed. Inventory synchronized.",
       inwardId, inventoryInserted: insertedCount,
       inventoryUpdated: inventoryUpdateOps.length,
       inventoryDeleted: inventoryDeleteIds.length, completedAt: now,
     });
   } catch (error) {
     console.error("Error completing inward:", error);
-    return res.status(500).json({ error: error.message, success: false });
+    return sendError(res, error.message);
   }
 };
 
@@ -388,10 +390,10 @@ exports.reopen = async (req, res) => {
     const db = await getDb();
 
     const inward = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    if (!inward) return res.status(404).json({ error: "Inward not found" });
+    if (!inward) return sendError(res, "Inward not found", 404);
 
     if (inward.status !== "Completed" || !inward.has_completed) {
-      return res.status(400).json({ error: "Only completed inwards can be reopened" });
+      return sendError(res, "Only completed inwards can be reopened", 400);
     }
 
     const now = new Date().toISOString();
@@ -405,10 +407,10 @@ exports.reopen = async (req, res) => {
     );
 
     const updated = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    return res.json({ success: true, data: updated });
+    return sendSuccess(res, updated);
   } catch (error) {
     console.error("Error reopening inward:", error);
-    return res.status(500).json({ error: error.message, success: false });
+    return sendError(res, error.message);
   }
 };
 
@@ -418,10 +420,10 @@ exports.uploadInvoices = async (req, res) => {
     const db = await getDb();
 
     const inward = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    if (!inward) return res.status(404).json({ error: "Inward not found" });
+    if (!inward) return sendError(res, "Inward not found", 404);
 
     const files = req.files;
-    if (!files || files.length === 0) return res.status(400).json({ error: "No files provided" });
+    if (!files || files.length === 0) return sendError(res, "No files provided", 400);
 
     const allSkus = new Set();
     const processedFiles = [];
@@ -445,7 +447,7 @@ exports.uploadInvoices = async (req, res) => {
     }
 
     if (allSkus.size === 0) {
-      return res.status(400).json({ error: "No SKUs could be extracted. Ensure files have a 'description' column with format: BRAND SKU_CODE FREE_TEXT" });
+      return sendError(res, "No SKUs could be extracted. Ensure files have a 'description' column with format: BRAND SKU_CODE FREE_TEXT", 400);
     }
 
     const allowed_skus = [...allSkus].sort();
@@ -454,10 +456,10 @@ exports.uploadInvoices = async (req, res) => {
       { $set: { allowed_skus, last_updated_at: new Date().toISOString() } }
     );
 
-    return res.json({ success: true, allowed_skus, count: allowed_skus.length, processedFiles });
+    return sendSuccess(res, { allowed_skus, count: allowed_skus.length, processedFiles });
   } catch (error) {
     console.error("Error processing invoices:", error);
-    return res.status(500).json({ error: error.message, success: false });
+    return sendError(res, error.message);
   }
 };
 
@@ -465,10 +467,10 @@ exports.getDetails = async (req, res) => {
   try {
     const db = await getDb();
     const details = await db.collection("wh_inward_details").find({ inward_id: req.params.inwardId }).toArray();
-    return res.json({ success: true, data: details });
+    return sendSuccess(res, details);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, error: err.message });
+    return sendError(res, err.message);
   }
 };
 
@@ -480,18 +482,18 @@ exports.addDetail = async (req, res) => {
     const db = await getDb();
 
     const inward = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    if (!inward) return res.status(404).json({ error: "Inward not found" });
+    if (!inward) return sendError(res, "Inward not found", 404);
 
     const canEdit = (inward.status === "In progress" && !inward.has_completed) || inward.status === "Reopened";
     if (!canEdit || inward.is_locked) {
-      return res.status(400).json({ error: "Cannot add details to a completed/locked inward" });
+      return sendError(res, "Cannot add details to a completed/locked inward", 400);
     }
 
     // New format: single detail with boxes array
     if (body.detail) {
       const d = body.detail;
-      if (!d.sku_code) return res.status(400).json({ error: "sku_code is required" });
-      if (!d.qty_per_box || Number(d.qty_per_box) <= 0) return res.status(400).json({ error: "qty_per_box must be > 0" });
+      if (!d.sku_code) return sendError(res, "sku_code is required", 400);
+      if (!d.qty_per_box || Number(d.qty_per_box) <= 0) return sendError(res, "qty_per_box must be > 0", 400);
 
       const existing = await db.collection("wh_inward_details").findOne({
         inward_id: inwardId,
@@ -500,11 +502,11 @@ exports.addDetail = async (req, res) => {
       });
 
       if (existing) {
-        return res.status(409).json({ error: "SKU × qty combination already exists. Use PATCH to add boxes.", existingDetailId: existing.inward_details_id });
+        return sendError(res, "SKU × qty combination already exists. Use PATCH to add boxes.", 409);
       }
 
       if (!d.label_img_url) {
-        return res.status(400).json({ error: "label_img_url is required for new SKU × qty combination" });
+        return sendError(res, "label_img_url is required for new SKU × qty combination", 400);
       }
 
       const boxes = (d.boxes || []).map((b, i) => ({
@@ -525,7 +527,7 @@ exports.addDetail = async (req, res) => {
       };
 
       await db.collection("wh_inward_details").insertOne(newDetail);
-      return res.status(201).json({ success: true, data: newDetail });
+      return sendSuccess(res, newDetail, 201);
     }
 
     // Legacy format: array of detail rows
@@ -554,18 +556,18 @@ exports.addDetail = async (req, res) => {
       });
 
       const r = await db.collection("wh_inward_details").insertMany(toInsert);
-      return res.json({ success: true, insertedCount: r.insertedCount });
+      return sendSuccess(res, { insertedCount: r.insertedCount });
     }
 
-    return res.status(400).json({ error: "detail or details is required" });
+    return sendError(res, "detail or details is required", 400);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ success: false, error: err.message });
+    return sendError(res, err.message);
   }
 };
 
 exports.bulkDetailBlock = (_req, res) => {
-  return res.status(403).json({ error: "Bulk inward_details mutations are blocked. Use completion flow." });
+  return sendError(res, "Bulk inward_details mutations are blocked. Use completion flow.", 403);
 };
 
 exports.updateDetail = async (req, res) => {
@@ -576,16 +578,16 @@ exports.updateDetail = async (req, res) => {
     const db = await getDb();
 
     const inward = await db.collection("wh_inwards").findOne({ inward_id: inwardId });
-    if (!inward) return res.status(404).json({ error: "Inward not found" });
+    if (!inward) return sendError(res, "Inward not found", 404);
 
     const canEdit = (inward.status === "In progress" && !inward.has_completed) || inward.status === "Reopened";
     if (!canEdit || inward.is_locked) {
-      return res.status(400).json({ error: "Inward is locked and cannot be edited" });
+      return sendError(res, "Inward is locked and cannot be edited", 400);
     }
 
     const detail = await db.collection("wh_inward_details").findOne({ inward_details_id: detailId, inward_id: inwardId });
-    if (!detail) return res.status(404).json({ error: "Inward detail not found" });
-    if (detail.is_locked) return res.status(400).json({ error: "Inward detail is locked and cannot be edited" });
+    if (!detail) return sendError(res, "Inward detail not found", 404);
+    if (detail.is_locked) return sendError(res, "Inward detail is locked and cannot be edited", 400);
 
     const now = new Date().toISOString();
 
@@ -605,13 +607,13 @@ exports.updateDetail = async (req, res) => {
       );
 
       const updated = await db.collection("wh_inward_details").findOne({ inward_details_id: detailId });
-      return res.json({ success: true, data: updated });
+      return sendSuccess(res, updated);
     }
 
     // Operation: Update a specific box
     if (body.update_box) {
       const { box_id, ...boxFields } = body.update_box;
-      if (!box_id) return res.status(400).json({ error: "box_id is required" });
+      if (!box_id) return sendError(res, "box_id is required", 400);
 
       const setObj = {};
       if (boxFields.damaged_flag !== undefined) setObj["boxes.$[box].damaged_flag"] = !!boxFields.damaged_flag;
@@ -633,7 +635,7 @@ exports.updateDetail = async (req, res) => {
       }
 
       const updated = await db.collection("wh_inward_details").findOne({ inward_details_id: detailId });
-      return res.json({ success: true, data: updated });
+      return sendSuccess(res, updated);
     }
 
     // Operation: Remove a specific box
@@ -654,7 +656,7 @@ exports.updateDetail = async (req, res) => {
       }
 
       const updated = await db.collection("wh_inward_details").findOne({ inward_details_id: detailId });
-      return res.json({ success: true, data: updated });
+      return sendSuccess(res, updated);
     }
 
     // Product-level field updates
@@ -665,7 +667,7 @@ exports.updateDetail = async (req, res) => {
     }
 
     if (Object.keys(update).length === 0) {
-      return res.status(400).json({ error: "No editable fields or operation provided" });
+      return sendError(res, "No editable fields or operation provided", 400);
     }
 
     update.last_updated_at = now;
@@ -673,9 +675,9 @@ exports.updateDetail = async (req, res) => {
 
     await db.collection("wh_inward_details").updateOne({ inward_details_id: detailId, inward_id: inwardId }, { $set: update });
     const updated = await db.collection("wh_inward_details").findOne({ inward_details_id: detailId, inward_id: inwardId });
-    return res.json({ success: true, data: updated });
+    return sendSuccess(res, updated);
   } catch (error) {
     console.error("Error updating inward detail:", error);
-    return res.status(500).json({ error: error.message, success: false });
+    return sendError(res, error.message);
   }
 };

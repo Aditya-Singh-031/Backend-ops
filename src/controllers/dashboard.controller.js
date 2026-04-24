@@ -1,4 +1,5 @@
 const { getDb } = require("../config/db");
+const { sendSuccess, sendError } = require("../utils/response");
 
 exports.getStats = async (req, res) => {
   try {
@@ -9,8 +10,7 @@ exports.getStats = async (req, res) => {
     const supplierCount = await db.collection("suppliers").countDocuments({});
     const poCount = await db.collection("purchase_orders").countDocuments({});
     
-    // Return direct JSON to match Python API format for the frontend
-    res.json({
+    return sendSuccess(res, {
         users: userCount,
         invoices_parsed: invoiceCount,
         suppliers: supplierCount,
@@ -19,9 +19,10 @@ exports.getStats = async (req, res) => {
     });
   } catch (error) {
     console.error("Stats Error:", error);
-    res.status(500).json({ error: "Failed to fetch stats" });
+    return sendError(res, "Failed to fetch stats");
   }
 };
+
 
 exports.getSuppliers = async (req, res) => {
   try {
@@ -77,10 +78,10 @@ exports.getSuppliers = async (req, res) => {
     ];
 
     const results = await db.collection("suppliers").aggregate(aggPipeline).toArray();
-    res.json(results);
+    return sendSuccess(res, results);
 
   } catch (error) {
     console.error("Suppliers Error:", error);
-    res.status(500).json({ error: "Failed to fetch suppliers" });
+    return sendError(res, "Failed to fetch suppliers");
   }
 };

@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require("uuid");
 const { getDb } = require("../config/db");
+const { sendSuccess, sendError } = require("../utils/response");
 
 exports.list = async (req, res) => {
   try {
@@ -19,12 +20,13 @@ exports.list = async (req, res) => {
     }
 
     const inventory = await db.collection("wh_inventory").find(filter).sort({ last_updated_at: -1 }).limit(500).toArray();
-    return res.json({ data: inventory, count: inventory.length });
+    return sendSuccess(res, inventory);
   } catch (error) {
     console.error("Error fetching inventory:", error);
-    return res.status(500).json({ error: error.message || "Failed to fetch inventory" });
+    return sendError(res, error.message || "Failed to fetch inventory");
   }
 };
+
 
 exports.update = async (req, res) => {
   try {
@@ -34,7 +36,7 @@ exports.update = async (req, res) => {
     const db = await getDb();
 
     const item = await db.collection("wh_inventory").findOne({ inventory_id: inventoryId });
-    if (!item) return res.status(404).json({ error: "Inventory item not found" });
+    if (!item) return sendError(res, "Inventory item not found", 404);
 
     const now = new Date().toISOString();
     const update = {};
@@ -42,17 +44,17 @@ exports.update = async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(body, "damaged_flag")) update.damaged_flag = !!body.damaged_flag;
     if (Object.prototype.hasOwnProperty.call(body, "comments")) update.comments = body.comments || null;
 
-    if (Object.keys(update).length === 0) return res.status(400).json({ error: "No editable fields provided" });
+    if (Object.keys(update).length === 0) return sendError(res, "No editable fields provided", 400);
 
     update.last_updated_at = now;
     update.last_updated_by = userId;
 
     await db.collection("wh_inventory").updateOne({ inventory_id: inventoryId }, { $set: update });
     const updated = await db.collection("wh_inventory").findOne({ inventory_id: inventoryId });
-    return res.json({ success: true, data: updated });
+    return sendSuccess(res, updated);
   } catch (error) {
     console.error("Error updating inventory item:", error);
-    return res.status(500).json({ error: error.message, success: false });
+    return sendError(res, error.message);
   }
 };
 
@@ -65,12 +67,12 @@ exports.directAdd = async (req, res) => {
       keep_aside_flag = false, comments = null, userId = "warehouse_user",
     } = body;
 
-    if (!sku_code || !String(sku_code).trim()) return res.status(400).json({ error: "sku_code is required" });
-    if (!qty_per_box || Number(qty_per_box) <= 0) return res.status(400).json({ error: "qty_per_box must be > 0" });
-    if (!no_of_boxes || Number(no_of_boxes) <= 0) return res.status(400).json({ error: "no_of_boxes must be > 0" });
-    if (!label_img_url) return res.status(400).json({ error: "label_img_url is required" });
-    if (damaged_flag && !damage_img_url) return res.status(400).json({ error: "damage_img_url is required when damaged_flag is true" });
-    if (comments && String(comments).length > 50) return res.status(400).json({ error: "comments must be 50 characters or fewer" });
+    if (!sku_code || !String(sku_code).trim()) return sendError(res, "sku_code is required", 400);
+    if (!qty_per_box || Number(qty_per_box) <= 0) return sendError(res, "qty_per_box must be > 0", 400);
+    if (!no_of_boxes || Number(no_of_boxes) <= 0) return sendError(res, "no_of_boxes must be > 0", 400);
+    if (!label_img_url) return sendError(res, "label_img_url is required", 400);
+    if (damaged_flag && !damage_img_url) return sendError(res, "damage_img_url is required when damaged_flag is true", 400);
+    if (comments && String(comments).length > 50) return sendError(res, "comments must be 50 characters or fewer", 400);
 
     const db = await getDb();
     const now = new Date().toISOString();
@@ -89,16 +91,16 @@ exports.directAdd = async (req, res) => {
     }
 
     await db.collection("wh_inventory").insertMany(inventoryDocs);
-    return res.status(201).json({
-      success: true, message: `${inventoryDocs.length} inventory item(s) added directly.`,
+    return sendSuccess(res, {
+      message: `${inventoryDocs.length} inventory item(s) added directly.`,
       count: inventoryDocs.length, data: inventoryDocs,
-    });
+    }, 201);
   } catch (error) {
     console.error("Error adding direct inventory:", error);
-    return res.status(500).json({ error: error.message, success: false });
+    return sendError(res, error.message);
   }
 };
 
 exports.bulkBlock = (_req, res) => {
-  return res.status(403).json({ error: "Direct inventory mutations are blocked. Use inward completion flow." });
+  return sendError(res, "Direct inventory mutations are blocked. Use inward completion flow.", 403);
 };

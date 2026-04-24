@@ -6,5 +6,7 @@ const { authMiddleware } = require("../middleware/auth");
 router.use(authMiddleware);
 
 router.get("/list", asyncHandler(ctrl.getList));
+router.delete("/delete-selected", asyncHandler(ctrl.deleteSelected));
+router.post("/export-selected", asyncHandler(ctrl.exportSelected));
 
 module.exports = router;

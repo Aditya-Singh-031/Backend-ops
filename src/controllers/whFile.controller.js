@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require("uuid");
 const multer = require("multer");
 const { BlobServiceClient } = require("@azure/storage-blob");
+const { sendSuccess, sendError } = require("../utils/response");
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -13,11 +14,11 @@ exports.uploadMiddleware = upload.single("file");
 
 exports.upload = async (req, res) => {
   try {
-    if (!connectionString) return res.status(500).json({ error: "Azure Storage not configured" });
+    if (!connectionString) return sendError(res, "Azure Storage not configured", 500);
 
     const file = req.file;
-    if (!file) return res.status(400).json({ error: "No file provided" });
-    if (!file.mimetype.startsWith("image/")) return res.status(400).json({ error: "Only image files are allowed" });
+    if (!file) return sendError(res, "No file provided", 400);
+    if (!file.mimetype.startsWith("image/")) return sendError(res, "Only image files are allowed", 400);
 
     const type = req.query.type;
     let folderPrefix = baseFolder ? baseFolder + "/" : "";
@@ -34,9 +35,10 @@ exports.upload = async (req, res) => {
     const blockBlobClient = cClient.getBlockBlobClient(blobName);
     await blockBlobClient.uploadData(file.buffer, { blobHTTPHeaders: { blobContentType: file.mimetype } });
 
-    return res.json({ success: true, url: blockBlobClient.url });
+    return sendSuccess(res, { url: blockBlobClient.url });
   } catch (err) {
     console.error("File upload error:", err);
-    return res.status(500).json({ error: err.message || "Failed to upload file" });
+    return sendError(res, err.message || "Failed to upload file");
   }
 };
+

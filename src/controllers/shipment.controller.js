@@ -82,7 +82,7 @@ exports.list = async (req, res) => {
     shipments = shipments.filter((s) => s.totalQuantity >= min && s.totalQuantity <= max);
   }
 
-  return res.json(shipments);
+  return sendSuccess(res, shipments);
 };
 
 exports.getById = async (req, res) => {
@@ -103,7 +103,7 @@ exports.getById = async (req, res) => {
   }
 
   const details = await db.collection("shipment_details").find({ shipment_id: oid }).toArray();
-  return res.json({ shipment, details });
+  return sendSuccess(res, { shipment, details });
 };
 
 exports.quickCreate = async (req, res) => {
@@ -143,7 +143,7 @@ exports.quickCreate = async (req, res) => {
     const buyer = await db.collection("buyers").findOne({ _id: doc.buyer_id });
     if (buyer) doc.buyer_name = buyer.name || buyer.cust_name || "";
   }
-  return res.status(201).json({ data: doc });
+  return sendSuccess(res, doc, 201);
 };
 
 exports.save = async (req, res) => {
@@ -207,7 +207,7 @@ exports.save = async (req, res) => {
     await db.collection("shipment_details").insertMany(lineItemDocs);
   }
 
-  return res.json({ success: true, shipmentId: savedId });
+  return sendSuccess(res, { shipmentId: savedId });
 };
 
 exports.uploadExcel = async (req, res) => {
@@ -285,7 +285,7 @@ exports.uploadExcel = async (req, res) => {
       })
       .filter((i) => i.description || i.qty > 0);
 
-    res.json({ items, currencyLabel });
+    return sendSuccess(res, { items, currencyLabel });
   } finally {
     fs.unlink(req.file.path, () => {});
   }
@@ -299,7 +299,7 @@ exports.downloadSample = (_req, res) => {
   for (const loc of locations) {
     if (fs.existsSync(loc)) return res.download(loc, "Import_Template.xlsx");
   }
-  return res.status(404).send("No sample file");
+  return sendError(res, "No sample file", 404);
 };
 
 exports.generateWorkingExcel = async (req, res) => {
@@ -502,7 +502,7 @@ exports.uploadImage = async (req, res) => {
   const { uploadFilePathToAzure } = require("../config/azure");
   try {
     const azureUrl = await uploadFilePathToAzure(req.file.path, req.file.originalname, req.file.mimetype);
-    return res.json({ success: true, url: azureUrl });
+    return sendSuccess(res, { url: azureUrl });
   } finally {
     fs.unlink(req.file.path, () => {});
   }

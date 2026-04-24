@@ -1,5 +1,5 @@
 const { getDb } = require("../config/db");
-const { sendSuccess } = require("../utils/response");
+const { sendSuccess, sendError } = require("../utils/response");
 const { ObjectId } = require("mongodb");
 
 exports.getBrands = async (req, res) => {
@@ -50,7 +50,7 @@ exports.updateBrand = async (req, res) => {
 };
 exports.uploadLogo = async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ success: false, error: "No image file uploaded" });
+    return sendError(res, "No image file uploaded", 400);
   }
   
   const db = await getDb();
