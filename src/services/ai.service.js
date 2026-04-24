@@ -23,28 +23,121 @@ const openai = new OpenAI({
 });
 
 // ─── ZOD SCHEMAS ───
+const InvoiceMetadataSchema = z.object({
+  invoice_number: z.string().nullable(),
+  invoice_date: z.string().nullable(),
+  irn_number: z.string().nullable(),
+  acknowledgement_number: z.string().nullable(),
+  acknowledgement_date: z.string().nullable(),
+  sale_order_number: z.string().nullable(),
+  sale_order_date: z.string().nullable()
+});
+
+const PartySchema = z.object({
+  name: z.string().nullable(),
+  trade_name: z.string().nullable(),
+  address: z.string().nullable(),
+  city: z.string().nullable(),
+  state: z.string().nullable(),
+  state_code: z.string().nullable(),
+  pincode: z.string().nullable(),
+  country: z.string().nullable(),
+  gstin: z.string().nullable(),
+  pan: z.string().nullable(),
+  cin: z.string().nullable(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  fax: z.string().nullable()
+});
+
+const ConsigneeSchema = z.object({
+  name: z.string().nullable(),
+  address: z.string().nullable(),
+  city: z.string().nullable(),
+  state: z.string().nullable(),
+  pincode: z.string().nullable(),
+  country: z.string().nullable(),
+  gstin: z.string().nullable()
+});
+
+const GSTDetailsSchema = z.object({
+  gst_customer_type: z.string().nullable(),
+  place_of_supply: z.string().nullable(),
+  reverse_charge_applicable: z.string().nullable()
+});
+
+const TotalsSchema = z.object({
+  total_line_items_count: z.number().nullable(),
+  total_parts_amount: z.number().nullable(),
+  total_discount_amount: z.number().nullable(),
+  total_taxable_value: z.number().nullable(),
+  cgst_total: z.number().nullable(),
+  sgst_total: z.number().nullable(),
+  igst_total: z.number().nullable(),
+  total_gst: z.number().nullable(),
+  other_charges: z.number().nullable(),
+  invoice_amount: z.number().nullable(),
+  invoice_amount_words: z.string().nullable(),
+  rounding_off_amount: z.number().nullable()
+});
+
 const LineItemSchema = z.object({
+  s_no: z.string().nullable(),
   description: z.string().nullable(),
-  hsn_code: z.string().nullable(),
   part_number: z.string().nullable().describe("CRITICAL: Must be the actual part number (e.g. 6RG807421AGRU). Do NOT use Invoice Numbers or Order IDs (like IFY26...)."),
+  hsn_code: z.string().nullable().describe("HSN or SAC code"),
   quantity: z.number().nullable(),
+  unit: z.string().nullable(),
   unit_price: z.number().nullable(),
   discount_percent: z.number().nullable(),
+  discount_amount: z.number().nullable(),
   base_amount: z.number().nullable(),
   cgst_rate: z.number().nullable(),
   sgst_rate: z.number().nullable(),
   igst_rate: z.number().nullable(),
+  cgst: z.number().nullable(),
+  sgst: z.number().nullable(),
+  igst: z.number().nullable(),
   total_gst: z.number().nullable(),
   amount_incl_gst: z.number().nullable()
 });
 
+const PaymentSchema = z.object({
+  date: z.string().nullable(),
+  amount: z.number().nullable(),
+  transaction_id: z.string().nullable(),
+  payer: z.string().nullable(),
+  mode: z.string().nullable()
+});
+
+const ShippingSchema = z.object({
+  mode_of_transport: z.string().nullable(),
+  vehicle_no: z.string().nullable(),
+  lr_gr_no: z.string().nullable(),
+  lr_gr_date: z.string().nullable(),
+  carrier_name: z.string().nullable()
+});
+
+const DocumentInfoSchema = z.object({
+  document_type: z.string().nullable(),
+  delivery_note_no: z.string().nullable(),
+  delivery_note_date: z.string().nullable(),
+  dispatch_date: z.string().nullable(),
+  due_date: z.string().nullable(),
+  payment_terms: z.string().nullable()
+});
+
 const InvoiceSchema = z.object({
-  invoice_number: z.string().nullable(),
-  invoice_date: z.string().nullable(),
-  vendor_name: z.string().nullable(),
-  vendor_gstin: z.string().nullable(),
-  invoice_amount: z.number().nullable(),
-  line_items: z.array(LineItemSchema)
+  invoice_metadata: InvoiceMetadataSchema,
+  seller: PartySchema,
+  buyer: PartySchema,
+  consignee: ConsigneeSchema,
+  gst_details: GSTDetailsSchema,
+  line_items: z.array(LineItemSchema),
+  totals: TotalsSchema,
+  payments: z.array(PaymentSchema).nullable(),
+  shipping: ShippingSchema,
+  document_info: DocumentInfoSchema
 });
 
 // ─── EXTRACTION LOGIC ───

@@ -23,41 +23,7 @@ app.use(
   })
 );
 
-// 💥 Forward AI/Parsing routes to Python Docker
-app.use(
-  "/api/invoices",
-  createProxyMiddleware({
-    target: "http://127.0.0.1:8000",
-    changeOrigin: true,
-    // 💥 THE FIX: We MUST use a function here, NOT a dictionary object.
-    // This forcibly glues "/api/v1/invoices" back onto whatever path Express hands us.
-    pathRewrite: (path, req) => {
-      return "/api/v1/invoices" + path;
-    },
-    onProxyRes: (proxyRes) => {
-      proxyRes.headers['connection'] = 'keep-alive';
-      proxyRes.headers['cache-control'] = 'no-cache';
-    },
-    onError: (err, req, res) => {
-      console.error("Proxy Error:", err);
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('Proxy Error: Could not connect to Python backend.');
-    }
-  })
-);
 
-// 💥 Forward PDF requests to Python Docker
-app.use(
-  "/storage",
-  createProxyMiddleware({
-    target: "http://127.0.0.1:8000",
-    changeOrigin: true,
-    // 💥 THE FIX: Same trick here. Forcefully append /storage.
-    pathRewrite: (path, req) => {
-      return "/storage" + path;
-    }
-  })
-);
 
 // Body parsers MUST stay below the proxy!
 app.use(express.json({ limit: "50mb" }));
