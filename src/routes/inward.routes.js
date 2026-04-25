@@ -14,6 +14,7 @@ router.post("/:id/exceptions", asyncHandler(ctrl.exceptions));
 router.post("/:id/verify", asyncHandler(ctrl.verify));
 router.post("/:id/pack", asyncHandler(ctrl.pack));
 router.post("/:id/complete", asyncHandler(ctrl.complete));
+router.delete("/:id", asyncHandler(ctrl.deleteInward));
 router.post("/:id/details", asyncHandler(ctrl.addDetail));
 router.patch("/:id/details/:detailId", asyncHandler(ctrl.updateDetail));
 router.get("/:id/export-excel", asyncHandler(ctrl.exportExcel));

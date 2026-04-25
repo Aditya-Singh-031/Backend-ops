@@ -133,6 +133,21 @@ exports.complete = async (req, res) => {
   sendSuccess(res, updated);
 };
 
+exports.deleteInward = async (req, res) => {
+  const inwardId = req.params.id;
+  const db = await getDb();
+
+  const inward = await db.collection("inwards").findOne({ inward_id: inwardId });
+  if (!inward) {
+    return sendError(res, "Inward not found", 404);
+  }
+
+  await db.collection("inwards").deleteOne({ inward_id: inwardId });
+  await db.collection("inwarddetails").deleteMany({ inward_id: inwardId });
+
+  sendSuccess(res, { message: "Inward deleted successfully" });
+};
+
 exports.addDetail = async (req, res) => {
   const { detail } = req.body;
   const inwardId = req.params.id;
