@@ -7,5 +7,7 @@ router.use(authMiddleware);
 
 router.get("/stats", asyncHandler(ctrl.getStats));
 router.get("/suppliers", asyncHandler(ctrl.getSuppliers));
+router.get("/suppliers/:id", asyncHandler(ctrl.getSupplierById));
+router.put("/suppliers/:id", asyncHandler(ctrl.updateSupplier));
 
 module.exports = router;

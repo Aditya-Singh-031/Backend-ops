@@ -8,16 +8,18 @@ const { v4: uuidv4 } = require("uuid");
  * This ensures correctness even when multiple outwards contribute to the same order.
  */
 async function recalculateOrderFulfillment(db, orderOid, orderDetailDoc) {
+  // Find all joins that have ANY fulfilled_item referencing this order
+  const orderIdStr = orderOid.toString();
   const allJoins = await db
     .collection("outward_order_joins")
-    .find({ order_id: orderOid })
+    .find({ "fulfilled_items.order_id": orderIdStr })
     .toArray();
 
-  // Sum fulfilled per part_number across all joins
+  // Sum fulfilled per part_number for THIS specific order only
   const fulfilledMap = {};
   allJoins.forEach((join) => {
     (join.fulfilled_items || []).forEach((fi) => {
-      if (fi.part_number) {
+      if (fi.part_number && fi.order_id === orderIdStr) {
         fulfilledMap[fi.part_number] =
           (fulfilledMap[fi.part_number] || 0) + (Number(fi.qty_fulfilled) || 0);
       }
@@ -57,14 +59,8 @@ exports.getJoin = async (req, res) => {
   });
   if (!join) return sendSuccess(res, null);
 
-  let order = null;
-  let orderDetail = null;
-  if (join.order_id) {
-    [order, orderDetail] = await Promise.all([
-      db.collection("orders").findOne({ _id: join.order_id, is_deleted: { $ne: true } }),
-      db.collection("order_details").findOne({ order_id: join.order_id, is_deleted: { $ne: true } }),
-    ]);
-  }
+  // No single order_id on join — buyer-based
+  // orderDetail is derived from fulfilled_items per-order if needed
 
   // ── Enrich fulfilled_items descriptions from invoice_line_items ──
   // Direct lookup by part_number — no chain needed
@@ -106,8 +102,6 @@ exports.getJoin = async (req, res) => {
   sendSuccess(res, {
     ...join,
     fulfilled_items: enrichedFulfilledItems,
-    order,
-    orderDetail,
   });
 };
 
@@ -146,7 +140,7 @@ exports.saveJoin = async (req, res) => {
   const buyerOid = toObjectId(buyer_id);
   if (!buyerOid) return sendError(res, "Invalid buyer_id", 400);
 
-  // Build clean fulfilled_items payload (only items with qty > 0)
+  // Build clean fulfilled_items (only items with qty > 0)
   const cleanFulfilled = (fulfilled_items || [])
     .filter((f) => (Number(f.qty_fulfilled) || 0) > 0)
     .map((f) => ({
@@ -155,8 +149,8 @@ exports.saveJoin = async (req, res) => {
       brand: f.brand || "",
       qty_fulfilled: Math.max(0, Number(f.qty_fulfilled) || 0),
       rate: Number(f.rate) || 0,
-      currency: f.currency || "",             // separate currency key
-      order_id: f.order_id || null,
+      currency: f.currency || "",
+      order_id: f.order_id || null,       // per-item order ref (for recalc)
       order_number: f.order_number || "",
     }));
 
@@ -164,20 +158,15 @@ exports.saveJoin = async (req, res) => {
     return sendError(res, "At least one part number must have qty_fulfilled > 0", 400);
   }
 
-  // Determine primary order_id: use the first item's order_id, or fallback to body order_id
-  // (used for outward.linked_order_id — we pick the first matched order)
-  const primaryOrderIdStr = cleanFulfilled.find((f) => f.order_id)?.order_id || order_id || null;
-  const primaryOrderOid = primaryOrderIdStr ? toObjectId(primaryOrderIdStr) : null;
-
   const now = new Date();
 
-  // Check for an existing join on this outward
+  // Check for existing join
   const existingJoin = await db.collection("outward_order_joins").findOne({ outward_id: id });
 
+  // Buyer-based join doc — NO top-level order_id
   const joinDoc = {
     outward_id: id,
     buyer_id: buyerOid,
-    order_id: primaryOrderOid,        // primary order reference (first matched)
     fulfilled_items: cleanFulfilled,
     updated_at: now,
   };
@@ -210,16 +199,10 @@ exports.saveJoin = async (req, res) => {
     }
   }
 
-  // Update outward with the linked order reference
+  // Update outward — mark as joined (no single linked_order_id)
   await db.collection("outwards").updateOne(
     { outward_id: id },
-    {
-      $set: {
-        linked_order_id: primaryOrderOid,
-        join_order_id: joinOrderId,
-        updated_at: now,
-      },
-    }
+    { $set: { join_order_id: joinOrderId, updated_at: now } }
   );
 
   const savedJoin = await db.collection("outward_order_joins").findOne({ outward_id: id });
@@ -234,25 +217,12 @@ exports.listJoins = async (req, res) => {
   const db = await getDb();
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-
   const skip = (page - 1) * limit;
 
-  // Use aggregation to join with orders and buyers
   const pipeline = [
     { $sort: { created_at: -1 } },
     { $skip: skip },
     { $limit: limit },
-    {
-      $lookup: {
-        from: "orders",
-        localField: "order_id",
-        foreignField: "_id",
-        as: "orderData"
-      }
-    },
-    {
-      $unwind: { path: "$orderData", preserveNullAndEmptyArrays: true }
-    },
     {
       $lookup: {
         from: "buyers",
@@ -261,21 +231,33 @@ exports.listJoins = async (req, res) => {
         as: "buyerData"
       }
     },
-    {
-      $unwind: { path: "$buyerData", preserveNullAndEmptyArrays: true }
-    },
+    { $unwind: { path: "$buyerData", preserveNullAndEmptyArrays: true } },
     {
       $project: {
         outward_id: 1,
         join_order_id: 1,
-        order_id: 1,
         buyer_id: 1,
         fulfilled_items: 1,
         created_at: 1,
         updated_at: 1,
-        "order.order_number": "$orderData.order_number",
-        "order.pi_number": "$orderData.pi_number",
-        "order.status": "$orderData.status",
+        // Distinct order count from fulfilled_items
+        orders_count: {
+          $size: {
+            $setUnion: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: { $ifNull: ["$fulfilled_items", []] },
+                    as: "fi",
+                    cond: { $and: [{ $ne: ["$$fi.order_id", null] }, { $ne: ["$$fi.order_id", ""] }] }
+                  }
+                },
+                as: "fi",
+                in: "$$fi.order_number"
+              }
+            }
+          }
+        },
         "buyer.cust_name": "$buyerData.cust_name",
         "buyer.name": "$buyerData.name",
       }
@@ -292,3 +274,4 @@ exports.listJoins = async (req, res) => {
     pagination: { page, limit, total, pages: Math.ceil(total / limit) }
   });
 };
+

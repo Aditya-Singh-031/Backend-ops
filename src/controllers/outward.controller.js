@@ -240,7 +240,7 @@ exports.getOutwardBuyerOrders = async (req, res) => {
     .sort({ created_at: -1 })
     .toArray();
 
-  // Step 5: Fetch order_details for all orders (items with part_number, rate, qty)
+  // Step 5: Fetch order_details for all orders
   const orderIds = orders.map((o) => o._id);
   const allDetails = orderIds.length > 0
     ? await db.collection("order_details")
@@ -251,11 +251,55 @@ exports.getOutwardBuyerOrders = async (req, res) => {
   const detailsByOrder = {};
   allDetails.forEach((d) => { detailsByOrder[d.order_id.toString()] = d; });
 
-  // Attach order_details to each order
-  const enrichedOrders = orders.map((o) => ({
-    ...o,
-    order_details: detailsByOrder[o._id.toString()] || null,
-  }));
+  // Step 6: LIVE fulfillment — per order+part aggregation across ALL joins for this buyer
+  // Key: "orderId::partNumber" → total qty fulfilled (excluding current outward)
+  const allJoins = await db
+    .collection("outward_order_joins")
+    .find({ buyer_id: toObjectId(buyerId) })
+    .toArray();
+
+  const liveFilledMap = {};  // others (not self)
+  const selfFilledMap  = {}; // this outward's existing join
+
+  allJoins.forEach((join) => {
+    const isSelf = join.outward_id === id;
+    (join.fulfilled_items || []).forEach((fi) => {
+      const pn  = (fi.part_number || "").trim();
+      const oid = (fi.order_id   || "").toString().trim();
+      if (!pn) return;
+      const key = oid ? `${oid}::${pn}` : `__no_order__::${pn}`;
+      if (isSelf) {
+        selfFilledMap[key]  = (selfFilledMap[key]  || 0) + (Number(fi.qty_fulfilled) || 0);
+      } else {
+        liveFilledMap[key]  = (liveFilledMap[key]  || 0) + (Number(fi.qty_fulfilled) || 0);
+      }
+    });
+  });
+
+  // Step 7: Enrich each order's items with live fill data
+  const enrichedOrders = orders.map((o) => {
+    const detail = detailsByOrder[o._id.toString()] || null;
+    const enrichedItems = (detail?.items || []).map((item) => {
+      const pn  = (item.part_number || "").trim();
+      const key = `${o._id.toString()}::${pn}`;
+      const othersFilled = liveFilledMap[key]  || 0;
+      const selfFilled   = selfFilledMap[key]  || 0;
+      const totalFilled  = othersFilled + selfFilled;
+      const pending      = Math.max(0, (item.quantity || 0) - totalFilled);
+      return {
+        ...item,
+        quantity_filled:  totalFilled,
+        others_filled:    othersFilled,  // filled by other outwards for THIS order
+        self_filled:      selfFilled,    // this outward's contribution to THIS order
+        quantity_pending: pending,
+      };
+    });
+    return {
+      ...o,
+      order_details: detail ? { ...detail, items: enrichedItems } : null,
+    };
+  });
+
 
   sendSuccess(res, {
     outward,
@@ -274,6 +318,7 @@ exports.getOutwardBuyerOrders = async (req, res) => {
     orders: enrichedOrders,
   });
 };
+
 
 exports.buyersList = async (_req, res) => {
   const db = await getDb();
