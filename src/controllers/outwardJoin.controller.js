@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require("uuid");
  * by summing qty_fulfilled across ALL outward_order_joins that reference this order.
  * This ensures correctness even when multiple outwards contribute to the same order.
  */
-async function recalculateOrderFulfillment(db, orderOid, orderDetailDoc) {
+exports.recalculateOrderFulfillment = async function recalculateOrderFulfillment(db, orderOid, orderDetailDoc) {
   // Find all joins that have ANY fulfilled_item referencing this order
   const orderIdStr = orderOid.toString();
   const allJoins = await db
@@ -277,7 +277,7 @@ exports.saveJoin = async (req, res) => {
       order_id: orderOid, is_deleted: { $ne: true }
     });
     if (orderDetail) {
-      await recalculateOrderFulfillment(db, orderOid, orderDetail);
+      await exports.recalculateOrderFulfillment(db, orderOid, orderDetail);
     }
   }
 
@@ -355,5 +355,43 @@ exports.listJoins = async (req, res) => {
     joins,
     pagination: { page, limit, total, pages: Math.ceil(total / limit) }
   });
+};
+
+exports.removeJoin = async (req, res) => {
+  const { joinId } = req.params;
+  const db = await getDb();
+
+  const join = await db.collection("outward_order_joins").findOne({ _id: toObjectId(joinId) });
+  if (!join) return sendError(res, "Join not found", 404);
+
+  const cleanFulfilled = join.fulfilled_items || [];
+  const distinctOrderIds = [...new Set(
+    cleanFulfilled.map((f) => f.order_id).filter(Boolean)
+  )];
+
+  // Delete the join
+  await db.collection("outward_order_joins").deleteOne({ _id: join._id });
+
+  // Recalculate fulfillment for affected orders
+  for (const oidStr of distinctOrderIds) {
+    const orderOid = toObjectId(oidStr);
+    if (!orderOid) continue;
+    const orderDetail = await db.collection("order_details").findOne({
+      order_id: orderOid, is_deleted: { $ne: true }
+    });
+    if (orderDetail) {
+      await exports.recalculateOrderFulfillment(db, orderOid, orderDetail);
+    }
+  }
+
+  // Clear join_order_id in outward
+  if (join.outward_id) {
+    await db.collection("outwards").updateOne(
+      { outward_id: join.outward_id },
+      { $set: { join_order_id: null, updated_at: new Date() } }
+    );
+  }
+
+  return sendSuccess(res, { message: "Joined orders deleted successfully" });
 };
 

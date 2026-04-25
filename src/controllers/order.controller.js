@@ -344,10 +344,9 @@ exports.remove = async (req, res) => {
   if (!oid) return sendError(res, "Invalid ID", 400);
 
   const db = await getDb();
-  const now = new Date();
-  await db.collection("orders").updateOne({ _id: oid }, { $set: { is_deleted: true, updated_at: now } });
-  await db.collection("order_details").updateMany({ order_id: oid }, { $set: { is_deleted: true, updated_at: now } });
-  return sendSuccess(res, { message: "Order deleted" });
+  await db.collection("orders").deleteOne({ _id: oid });
+  await db.collection("order_details").deleteMany({ order_id: oid });
+  return sendSuccess(res, { message: "Order deleted successfully" });
 };
 
 exports.downloadExcel = async (req, res) => {

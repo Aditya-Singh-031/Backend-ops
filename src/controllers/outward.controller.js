@@ -73,6 +73,9 @@ exports.create = async (req, res) => {
 
   const outwardBoxes = [];
   (selected_box_ids || []).forEach((boxId) => {
+    if (req.body.custom_boxes && req.body.custom_boxes.some(cb => cb.box_id === boxId)) {
+      return; // Handled below
+    }
     for (const inward of allInwards) {
       const boxes = inward.packing_list?.boxes || [];
       for (let idx = 0; idx < boxes.length; idx++) {
@@ -92,6 +95,28 @@ exports.create = async (req, res) => {
       }
     }
   });
+
+  if (req.body.custom_boxes && req.body.custom_boxes.length > 0) {
+    req.body.custom_boxes.forEach(cb => {
+      const sku_code = cb.items?.map((i) => i.sku).join(", ") || "";
+      const qty_in_box = cb.items?.reduce((sum, i) => sum + (i.qty || 0), 0) || 0;
+      
+      outwardBoxes.push({
+        box_id: cb.box_id,
+        inward_id: cb.inward_id || "CUSTOM",
+        box_number: cb.box_number || "CUST-1",
+        items: cb.items || [],
+        sku_code,
+        qty_in_box,
+        length: cb.length || "",
+        width: cb.width || "",
+        height: cb.height || "",
+        damaged_in_transit: cb.damaged_in_transit || false,
+        transit_damage_img: cb.transit_damage_img || "",
+        comments: cb.comments || ""
+      });
+    });
+  }
 
   const newOutward = {
     outward_id: `OUT-${uuidv4().slice(0, 8).toUpperCase()}`,
@@ -131,6 +156,10 @@ exports.update = async (req, res) => {
     const allInwards = await db.collection("inwards").find({ packing_list: { $exists: true, $ne: null } }).toArray();
     const newBoxes = [];
     selected_box_ids.forEach((boxId) => {
+      if (req.body.custom_boxes && req.body.custom_boxes.some(cb => cb.box_id === boxId)) {
+        return; // Handled below
+      }
+
       const existing = (outward.boxes || []).find((b) => b.box_id === boxId);
       if (existing) { newBoxes.push(existing); return; }
       for (const inward of allInwards) {
@@ -152,6 +181,29 @@ exports.update = async (req, res) => {
         }
       }
     });
+
+    if (req.body.custom_boxes && req.body.custom_boxes.length > 0) {
+      req.body.custom_boxes.forEach(cb => {
+        const sku_code = cb.items?.map((i) => i.sku).join(", ") || "";
+        const qty_in_box = cb.items?.reduce((sum, i) => sum + (i.qty || 0), 0) || 0;
+        
+        newBoxes.push({
+          box_id: cb.box_id,
+          inward_id: cb.inward_id || "CUSTOM",
+          box_number: cb.box_number || "CUST-1",
+          items: cb.items || [],
+          sku_code,
+          qty_in_box,
+          length: cb.length || "",
+          width: cb.width || "",
+          height: cb.height || "",
+          damaged_in_transit: cb.damaged_in_transit || false,
+          transit_damage_img: cb.transit_damage_img || "",
+          comments: cb.comments || ""
+        });
+      });
+    }
+
     update.boxes = newBoxes;
     update.total_boxes = newBoxes.length;
   }
@@ -203,6 +255,42 @@ exports.updateStatus = async (req, res) => {
   await db.collection("outwards").updateOne({ outward_id: id }, { $set: updateData });
   const updated = await db.collection("outwards").findOne({ outward_id: id });
   sendSuccess(res, updated);
+};
+
+exports.remove = async (req, res) => {
+  const { id } = req.params;
+  const db = await getDb();
+  
+  const outward = await db.collection("outwards").findOne({ outward_id: id });
+  if (!outward) return sendError(res, "Outward not found", 404);
+
+  // If there's an associated join, delete it and recalculate orders
+  const join = await db.collection("outward_order_joins").findOne({ outward_id: id });
+  if (join) {
+    const cleanFulfilled = join.fulfilled_items || [];
+    const distinctOrderIds = [...new Set(
+      cleanFulfilled.map((f) => f.order_id).filter(Boolean)
+    )];
+    
+    await db.collection("outward_order_joins").deleteOne({ _id: join._id });
+    
+    // Recalculate fulfillment for every distinct order touched by this join
+    const { recalculateOrderFulfillment } = require("./outwardJoin.controller");
+    for (const oidStr of distinctOrderIds) {
+      const orderOid = toObjectId(oidStr);
+      if (!orderOid) continue;
+      const orderDetail = await db.collection("order_details").findOne({
+        order_id: orderOid, is_deleted: { $ne: true }
+      });
+      if (orderDetail) {
+        await recalculateOrderFulfillment(db, orderOid, orderDetail);
+      }
+    }
+  }
+
+  // Finally delete the outward completely
+  await db.collection("outwards").deleteOne({ outward_id: id });
+  return sendSuccess(res, { message: "Outward deleted successfully" });
 };
 
 exports.removeBox = async (req, res) => {

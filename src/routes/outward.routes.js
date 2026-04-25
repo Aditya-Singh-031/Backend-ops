@@ -21,6 +21,8 @@ router.post("/", validate(createOutwardSchema), asyncHandler(ctrl.create));
 router.patch("/:id", validate(updateOutwardSchema), asyncHandler(ctrl.update));
 router.patch("/:id/boxes/:boxId", asyncHandler(ctrl.updateBox));
 router.patch("/:id/status", asyncHandler(ctrl.updateStatus));
+router.delete("/joins/:joinId", asyncHandler(joinCtrl.removeJoin));
 router.delete("/:id/boxes/:boxId", asyncHandler(ctrl.removeBox));
+router.delete("/:id", asyncHandler(ctrl.remove));
 
 module.exports = router;
