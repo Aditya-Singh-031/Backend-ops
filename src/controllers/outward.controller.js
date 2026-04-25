@@ -16,24 +16,33 @@ exports.getById = async (req, res) => {
 };
 
 exports.availableBoxes = async (req, res) => {
-  const { exclude_outward_id } = req.query;
+  const { exclude_outward_id, include_used } = req.query;
   const db = await getDb();
 
   const allInwards = await db.collection("inwards").find({ packing_list: { $exists: true, $ne: null } }).toArray();
   const existingOutwards = await db.collection("outwards").find({}).toArray();
-  const usedBoxIds = new Set();
+
+  // Map: boxId → outward_id (which outward uses this box)
+  const usedBoxMap = {};
   existingOutwards.forEach((outward) => {
     if (exclude_outward_id && outward.outward_id === exclude_outward_id) return;
-    (outward.boxes || []).forEach((box) => usedBoxIds.add(box.box_id));
+    (outward.boxes || []).forEach((box) => {
+      usedBoxMap[box.box_id] = outward.outward_id;
+    });
   });
 
-  const availableBoxes = [];
+  const resultBoxes = [];
   allInwards.forEach((inward) => {
     const boxes = inward.packing_list?.boxes || [];
     boxes.forEach((box, idx) => {
       const boxId = `${inward.inward_id}-BOX-${box.box_number || idx + 1}`;
-      if (usedBoxIds.has(boxId)) return;
-      availableBoxes.push({
+      const usedBy = usedBoxMap[boxId];
+      const isUsed = !!usedBy;
+
+      // Skip used boxes unless include_used=true
+      if (isUsed && include_used !== "true") return;
+
+      resultBoxes.push({
         box_id: boxId,
         box_number: box.box_number || idx + 1,
         inward_id: inward.inward_id,
@@ -44,11 +53,13 @@ exports.availableBoxes = async (req, res) => {
         width: box.width || "",
         height: box.height || "",
         inward_status: inward.status,
+        is_used: isUsed,
+        used_by_outward: usedBy || null,
       });
     });
   });
 
-  sendSuccess(res, availableBoxes);
+  sendSuccess(res, resultBoxes);
 };
 
 exports.create = async (req, res) => {
