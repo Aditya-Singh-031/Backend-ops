@@ -66,7 +66,49 @@ exports.getJoin = async (req, res) => {
     ]);
   }
 
-  sendSuccess(res, { ...join, order, orderDetail });
+  // ── Enrich fulfilled_items descriptions from invoice_line_items ──
+  // Direct lookup by part_number — no chain needed
+  let enrichedFulfilledItems = join.fulfilled_items || [];
+
+  try {
+    const partNumbers = enrichedFulfilledItems
+      .map((fi) => (fi.part_number || "").trim())
+      .filter(Boolean);
+
+    if (partNumbers.length > 0) {
+      const lineItems = await db
+        .collection("invoice_line_items")
+        .find({ part_number: { $in: partNumbers } })
+        .project({ part_number: 1, description: 1, _id: 0 })
+        .toArray();
+
+      // part_number → description map (last match wins)
+      const descMap = {};
+      lineItems.forEach((li) => {
+        if (li.part_number && li.description) {
+          descMap[li.part_number.trim()] = li.description;
+        }
+      });
+
+      enrichedFulfilledItems = enrichedFulfilledItems.map((fi) => {
+        const invoiceDesc = descMap[(fi.part_number || "").trim()];
+        return {
+          ...fi,
+          description: invoiceDesc || fi.description || "",
+          description_source: invoiceDesc ? "invoice" : "join",
+        };
+      });
+    }
+  } catch (err) {
+    console.warn("[getJoin] Could not enrich descriptions from invoice_line_items:", err.message);
+  }
+
+  sendSuccess(res, {
+    ...join,
+    fulfilled_items: enrichedFulfilledItems,
+    order,
+    orderDetail,
+  });
 };
 
 /**
@@ -79,43 +121,32 @@ exports.getJoin = async (req, res) => {
  *   - Recalculates quantity_filled / quantity_pending in order_details for the target order.
  *   - Updates outward.linked_order_id.
  */
+/**
+ * POST /outwards/:id/join
+ * Creates or updates the join record for an outward.
+ *
+ * NEW BEHAVIOUR: Instead of picking a single order_id, we take buyer_id
+ * and fulfilled_items (each with part_number + qty_fulfilled).
+ * The system finds which CONFIRMED order each part_number belongs to
+ * and updates fulfillment quantities accordingly across all matched orders.
+ *
+ * Body: { buyer_id, fulfilled_items: [{ part_number, description, brand, qty_fulfilled, order_id? }] }
+ * order_id on each fulfilled_item is the specific order it maps to (sent from frontend after aggregation).
+ */
 exports.saveJoin = async (req, res) => {
   const { id } = req.params;
-  const { order_id, buyer_id, fulfilled_items } = req.body;
+  const { buyer_id, fulfilled_items, order_id } = req.body;
   const db = await getDb();
-
-  if (!order_id) return sendError(res, "order_id is required", 400);
 
   // Validate outward
   const outward = await db.collection("outwards").findOne({ outward_id: id });
   if (!outward) return sendError(res, "Outward not found", 404);
 
-  // Validate order
-  const orderOid = toObjectId(order_id);
-  if (!orderOid) return sendError(res, "Invalid order_id", 400);
+  if (!buyer_id) return sendError(res, "buyer_id is required", 400);
+  const buyerOid = toObjectId(buyer_id);
+  if (!buyerOid) return sendError(res, "Invalid buyer_id", 400);
 
-  const [order, orderDetail] = await Promise.all([
-    db.collection("orders").findOne({ _id: orderOid, is_deleted: { $ne: true } }),
-    db.collection("order_details").findOne({ order_id: orderOid, is_deleted: { $ne: true } }),
-  ]);
-  if (!order) return sendError(res, "Order not found", 404);
-  if (!orderDetail) return sendError(res, "Order details not found", 404);
-
-  // Check for an existing join on this outward
-  const existingJoin = await db.collection("outward_order_joins").findOne({ outward_id: id });
-
-  if (existingJoin) {
-    // If updating, prevent changing the order or buyer
-    if (existingJoin.order_id.toString() !== order_id) {
-      return sendError(res, "Cannot change the order once it has been joined. Please delete or create a new outward for a different order.", 400);
-    }
-    if (buyer_id && existingJoin.buyer_id && existingJoin.buyer_id.toString() !== buyer_id) {
-       return sendError(res, "Cannot change the buyer once it has been joined.", 400);
-    }
-  }
-
-
-  // Build clean fulfilled_items payload
+  // Build clean fulfilled_items payload (only items with qty > 0)
   const cleanFulfilled = (fulfilled_items || [])
     .filter((f) => (Number(f.qty_fulfilled) || 0) > 0)
     .map((f) => ({
@@ -123,39 +154,76 @@ exports.saveJoin = async (req, res) => {
       description: f.description || "",
       brand: f.brand || "",
       qty_fulfilled: Math.max(0, Number(f.qty_fulfilled) || 0),
+      rate: Number(f.rate) || 0,
+      currency: f.currency || "",             // separate currency key
+      order_id: f.order_id || null,
+      order_number: f.order_number || "",
     }));
 
+  if (cleanFulfilled.length === 0) {
+    return sendError(res, "At least one part number must have qty_fulfilled > 0", 400);
+  }
+
+  // Determine primary order_id: use the first item's order_id, or fallback to body order_id
+  // (used for outward.linked_order_id — we pick the first matched order)
+  const primaryOrderIdStr = cleanFulfilled.find((f) => f.order_id)?.order_id || order_id || null;
+  const primaryOrderOid = primaryOrderIdStr ? toObjectId(primaryOrderIdStr) : null;
+
   const now = new Date();
+
+  // Check for an existing join on this outward
+  const existingJoin = await db.collection("outward_order_joins").findOne({ outward_id: id });
+
   const joinDoc = {
     outward_id: id,
-    order_id: orderOid,
-    buyer_id: buyer_id ? toObjectId(buyer_id) : null,
+    buyer_id: buyerOid,
+    order_id: primaryOrderOid,        // primary order reference (first matched)
     fulfilled_items: cleanFulfilled,
     updated_at: now,
   };
 
-  // Upsert join record
-  const isNew = !existingJoin || existingJoin.order_id.toString() !== order_id;
-  if (isNew) {
-    joinDoc.join_order_id = `ORDJ-${uuidv4().substring(0, 8).toUpperCase()}`;
+  let joinOrderId;
+  if (!existingJoin) {
+    joinOrderId = `ORDJ-${uuidv4().substring(0, 8).toUpperCase()}`;
+    joinDoc.join_order_id = joinOrderId;
     joinDoc.created_at = now;
     await db.collection("outward_order_joins").insertOne(joinDoc);
   } else {
-    joinDoc.join_order_id = existingJoin.join_order_id || `ORDJ-${uuidv4().substring(0, 8).toUpperCase()}`;
+    joinOrderId = existingJoin.join_order_id || `ORDJ-${uuidv4().substring(0, 8).toUpperCase()}`;
+    joinDoc.join_order_id = joinOrderId;
     await db.collection("outward_order_joins").updateOne({ outward_id: id }, { $set: joinDoc });
   }
 
-  // Recalculate the target order's fulfillment quantities
-  const updatedItems = await recalculateOrderFulfillment(db, orderOid, orderDetail);
+  // Recalculate fulfillment for every distinct order touched by this join
+  const distinctOrderIds = [...new Set(
+    cleanFulfilled.map((f) => f.order_id).filter(Boolean)
+  )];
+
+  for (const oidStr of distinctOrderIds) {
+    const orderOid = toObjectId(oidStr);
+    if (!orderOid) continue;
+    const orderDetail = await db.collection("order_details").findOne({
+      order_id: orderOid, is_deleted: { $ne: true }
+    });
+    if (orderDetail) {
+      await recalculateOrderFulfillment(db, orderOid, orderDetail);
+    }
+  }
 
   // Update outward with the linked order reference
   await db.collection("outwards").updateOne(
     { outward_id: id },
-    { $set: { linked_order_id: orderOid, join_order_id: joinDoc.join_order_id, updated_at: now } }
+    {
+      $set: {
+        linked_order_id: primaryOrderOid,
+        join_order_id: joinOrderId,
+        updated_at: now,
+      },
+    }
   );
 
   const savedJoin = await db.collection("outward_order_joins").findOne({ outward_id: id });
-  sendSuccess(res, { join: savedJoin, updated_order_items: updatedItems });
+  sendSuccess(res, { join: savedJoin });
 };
 
 /**

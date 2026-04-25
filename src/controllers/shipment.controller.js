@@ -4,6 +4,7 @@ const path = require("path");
 const archiver = require("archiver");
 const { getDb, toObjectId } = require("../config/db");
 const { sendSuccess, sendError } = require("../utils/response");
+const { v4: uuidv4 } = require("uuid");
 const {
   safeParseFloat,
   toBoolean,
@@ -111,6 +112,7 @@ exports.quickCreate = async (req, res) => {
   const body = req.body;
 
   const doc = {
+    shipment_id: uuidv4(),
     buyer_id: body.buyer_id ? toObjectId(body.buyer_id) : null,
     consignee_id: body.consignee_id ? toObjectId(body.consignee_id) : (body.buyer_id ? toObjectId(body.buyer_id) : null),
     cha_details: body.cha_details || "",

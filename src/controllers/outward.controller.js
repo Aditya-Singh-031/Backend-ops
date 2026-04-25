@@ -229,16 +229,33 @@ exports.getOutwardBuyerOrders = async (req, res) => {
   if (!buyerId) return sendError(res, "Shipment has no buyer linked", 400);
   const buyer = await db.collection("buyers").findOne({ _id: toObjectId(buyerId) });
 
-  // Step 4: Fetch all PENDING and CONFIRMED orders belonging to this buyer
+  // Step 4: Fetch ALL CONFIRMED orders belonging to this buyer
   const orders = await db
     .collection("orders")
     .find({
       buyer_id: toObjectId(buyerId),
-      status: { $in: ["PENDING", "CONFIRMED"] },
+      status: "CONFIRMED",
       is_deleted: { $ne: true },
     })
     .sort({ created_at: -1 })
     .toArray();
+
+  // Step 5: Fetch order_details for all orders (items with part_number, rate, qty)
+  const orderIds = orders.map((o) => o._id);
+  const allDetails = orderIds.length > 0
+    ? await db.collection("order_details")
+        .find({ order_id: { $in: orderIds }, is_deleted: { $ne: true } })
+        .toArray()
+    : [];
+
+  const detailsByOrder = {};
+  allDetails.forEach((d) => { detailsByOrder[d.order_id.toString()] = d; });
+
+  // Attach order_details to each order
+  const enrichedOrders = orders.map((o) => ({
+    ...o,
+    order_details: detailsByOrder[o._id.toString()] || null,
+  }));
 
   sendSuccess(res, {
     outward,
@@ -254,7 +271,7 @@ exports.getOutwardBuyerOrders = async (req, res) => {
           currency: buyer.currency || "",
         }
       : null,
-    orders,
+    orders: enrichedOrders,
   });
 };
 
