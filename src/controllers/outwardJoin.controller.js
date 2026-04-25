@@ -102,8 +102,90 @@ exports.getJoin = async (req, res) => {
   sendSuccess(res, {
     ...join,
     fulfilled_items: enrichedFulfilledItems,
+    buyer_order_stats: await getBuyerOrderStats(db, join.buyer_id, enrichedFulfilledItems),
   });
 };
+
+/**
+ * Aggregate total ordered & total fulfilled (from ALL joins) per part_number
+ * across ALL confirmed orders for the buyer.
+ */
+async function getBuyerOrderStats(db, buyerId, fulfilledItems) {
+  if (!buyerId) return null;
+  try {
+    const buyerOid = require("../config/db").toObjectId ? require("../config/db").toObjectId(buyerId) : null;
+    if (!buyerOid) return null;
+
+    // All confirmed orders for this buyer
+    const orders = await db.collection("orders").find({
+      buyer_id: buyerOid,
+      status: "CONFIRMED",
+      is_deleted: { $ne: true },
+    }).toArray();
+
+    if (orders.length === 0) return null;
+
+    const orderIds = orders.map(o => o._id);
+    const allDetails = await db.collection("order_details")
+      .find({ order_id: { $in: orderIds }, is_deleted: { $ne: true } })
+      .toArray();
+
+    // Aggregate total qty ordered per part_number across all orders
+    const totalOrderedMap = {};   // partNumber → total qty
+    const orderQtyMap = {};       // orderId → { partNumber → qty }
+    allDetails.forEach(d => {
+      const oidStr = d.order_id.toString();
+      orderQtyMap[oidStr] = {};
+      (d.items || []).forEach(item => {
+        const pn = (item.part_number || "").trim();
+        if (!pn) return;
+        totalOrderedMap[pn] = (totalOrderedMap[pn] || 0) + (Number(item.quantity) || 0);
+        orderQtyMap[oidStr][pn] = (Number(item.quantity) || 0);
+      });
+    });
+
+    // Aggregate total fulfilled per part_number from ALL joins for this buyer
+    const allJoins = await db.collection("outward_order_joins")
+      .find({ buyer_id: buyerOid })
+      .toArray();
+
+    const totalFilledMap = {};    // partNumber → total qty fulfilled across ALL joins
+    allJoins.forEach(j => {
+      (j.fulfilled_items || []).forEach(fi => {
+        const pn = (fi.part_number || "").trim();
+        if (pn) totalFilledMap[pn] = (totalFilledMap[pn] || 0) + (Number(fi.qty_fulfilled) || 0);
+      });
+    });
+
+    // Build per-part stats
+    const partStats = {};
+    const allParts = new Set([
+      ...Object.keys(totalOrderedMap),
+      ...(fulfilledItems || []).map(fi => (fi.part_number || "").trim()).filter(Boolean),
+    ]);
+
+    allParts.forEach(pn => {
+      const ordered = totalOrderedMap[pn] || 0;
+      const filled  = Math.min(ordered, totalFilledMap[pn] || 0);
+      partStats[pn] = {
+        total_ordered:   ordered,
+        total_fulfilled: filled,
+        total_pending:   Math.max(0, ordered - filled),
+      };
+    });
+
+    return {
+      orders_count: orders.length,
+      part_stats: partStats,
+      total_ordered:   Object.values(partStats).reduce((s, p) => s + p.total_ordered, 0),
+      total_fulfilled: Object.values(partStats).reduce((s, p) => s + p.total_fulfilled, 0),
+      total_pending:   Object.values(partStats).reduce((s, p) => s + p.total_pending, 0),
+    };
+  } catch (err) {
+    console.warn("[getBuyerOrderStats] Error:", err.message);
+    return null;
+  }
+}
 
 /**
  * POST /outwards/:id/join
