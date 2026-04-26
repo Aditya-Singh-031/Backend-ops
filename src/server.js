@@ -22,7 +22,6 @@ app.use(
     credentials: true,
   })
 );
-
 // Body parsers MUST stay below the proxy!
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
@@ -31,9 +30,8 @@ app.use(cookieParser());
 // 💥 Serve the logo images
 app.use("/api/uploads", express.static(path.join(__dirname, "..", "storage", "uploads")));
 
-// 💥 THE FIX: Tell Node.js how to serve the PDFs!
-app.use("/storage", express.static(path.join(__dirname, "..", "storage")));
-
+// 💥 THE FIX: Tell Node.js to serve the PDFs and bypass Nginx!
+app.use("/api/storage", express.static(path.join(__dirname, "..", "storage")));
 const { sendSuccess, sendError } = require("./utils/response");
 
 app.get("/api/health", (_req, res) => {
