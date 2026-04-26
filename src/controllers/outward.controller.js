@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require("uuid");
+const ExcelJS = require("exceljs");
 const { getDb, toObjectId } = require("../config/db");
 const { sendSuccess, sendError } = require("../utils/response");
 
@@ -432,4 +433,326 @@ exports.buyersList = async (_req, res) => {
     currency: b.currency || "",
   }));
   sendSuccess(res, normalized);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  EXPORT PACKING LIST  ─  Outward packing list with sequential Sr No (1..N)
+// ─────────────────────────────────────────────────────────────────────────────
+exports.exportPackingList = async (req, res) => {
+  const outwardId = req.params.id;
+  const db = await getDb();
+
+  const outward = await db.collection("outwards").findOne({ outward_id: outwardId });
+  if (!outward) return sendError(res, "Outward not found", 404);
+
+  const boxes = outward.boxes || [];
+
+  // Fetch shipment for invoice number
+  let shipment = null;
+  if (outward.shipment_id) {
+    try { shipment = await db.collection("shipments").findOne({ _id: toObjectId(outward.shipment_id) }); } catch {}
+  }
+
+  // Fetch SKU descriptions from invoice_line_items
+  const skuSet = new Set();
+  boxes.forEach(box => (box.items || []).forEach(i => { if (i.sku) skuSet.add(i.sku); }));
+  const partNumbers = [...skuSet];
+  let skuInfoMap = {};
+  if (partNumbers.length > 0) {
+    const lineItems = await db.collection("invoice_line_items")
+      .find({ part_number: { $in: partNumbers } })
+      .project({ part_number: 1, description: 1, net_weight: 1, part_net_wt: 1, unit_weight: 1, _id: 0 })
+      .toArray();
+    lineItems.forEach(li => {
+      if (li.part_number && !skuInfoMap[li.part_number]) {
+        skuInfoMap[li.part_number] = {
+          description: li.description || "",
+          part_net_wt: Number(li.part_net_wt || li.net_weight || li.unit_weight || 0),
+        };
+      }
+    });
+  }
+
+  // ── Build workbook ───────────────────────────────────────────────────────
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Packing List");
+
+  // Column widths (A–M = 13 cols)
+  ws.columns = [
+    { width: 10 }, // A  Sr No
+    { width: 18 }, // B  PART NO.
+    { width: 22 }, // C  PART DESCRIPTION
+    { width: 12 }, // D  Qty per box
+    { width: 12 }, // E  No of boxes
+    { width: 16 }, // F  PART NET WT (KGS)
+    { width: 16 }, // G  Pallet/Box weight
+    { width: 18 }, // H  TOTAL NET WT (KGS)
+    { width: 22 }, // I  TOTAL GROSS WEIGHT (KGS)
+    { width: 7  }, // J  L
+    { width: 7  }, // K  W
+    { width: 7  }, // L  H
+    { width: 9  }, // M  CBM
+  ];
+
+  const THIN = { style: "thin" };
+  const BD   = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+  const GRAY = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
+  const centerMid = { horizontal: "center", vertical: "middle", wrapText: true };
+  const leftMid   = { horizontal: "left",   vertical: "middle", wrapText: true };
+
+  const sc = (row, col, opts = {}) => {
+    const c = ws.getCell(row, col);
+    if (opts.v !== undefined) c.value = opts.v;
+    c.border    = BD;
+    c.alignment = opts.left ? leftMid : centerMid;
+    if (opts.bold) c.font = { bold: true, size: opts.size || 10 };
+    if (opts.gray) c.fill = GRAY;
+    if (opts.titleSize) c.font = { bold: true, size: opts.titleSize };
+    return c;
+  };
+  const ms = (r1, c1, r2, c2, opts = {}) => { ws.mergeCells(r1, c1, r2, c2); return sc(r1, c1, opts); };
+
+  const invoiceNumber = shipment?.invoice_number || outwardId;
+  const invoiceDate = (() => {
+    const d = new Date(outward.outward_date || outward.created_at);
+    return `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+  })();
+
+  const SHIPPER_NAME  = "MORSEBIZ TECHNOLOGY SERVICES PRIVATE LIMITED";
+  const SHIPPER_GST   = "GST NO: 27AAPCM5559A1Z9";
+  const SHIPPER_ADDR  = "20th Floor, Building No/Flat No – CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai, Mumbai Suburban, Maharashtra 400063";
+  const DISPATCH_FROM = "A/21/1, MIDC Chincholi, Solapur, Maharashtra - 413255";
+
+  // ROW 1: title
+  ms(1, 1, 1, 13, { v: "Packing list", titleSize: 13 }); ws.getRow(1).height = 22;
+  // ROW 2
+  ms(2, 1, 2, 2,  { v: "Shipper :", bold: true });
+  ms(2, 3, 2, 4,  { v: "Buyer :",   bold: true });
+  ms(2, 5, 2, 8,  { v: "Ship To :", bold: true });
+  sc(2, 9,        { v: "Invoice Number:", bold: true });
+  ms(2, 10, 2, 13,{ v: invoiceNumber }); ws.getRow(2).height = 18;
+  // ROW 3
+  ms(3, 1, 3, 2,  { v: SHIPPER_NAME, bold: true });
+  ms(3, 3, 3, 4,  { v: "TO ORDER" });
+  ms(3, 5, 3, 8,  { v: "TO ORDER" });
+  sc(3, 9,        { v: "Invoice Date:", bold: true });
+  ms(3, 10, 3, 13,{ v: invoiceDate }); ws.getRow(3).height = 30;
+  // ROW 4
+  ms(4, 1, 4, 2,  { v: SHIPPER_GST, bold: true }); ms(4, 3, 4, 4, {}); ms(4, 5, 4, 8, {}); ms(4, 9, 4, 13, {}); ws.getRow(4).height = 16;
+  // ROW 5
+  ms(5, 1, 5, 2,  { v: SHIPPER_ADDR, left: true }); ms(5, 3, 5, 4, {}); ms(5, 5, 5, 8, {}); ms(5, 9, 5, 13, {}); ws.getRow(5).height = 55;
+  // ROW 6
+  ms(6, 1, 6, 2,  { v: "Dispatch From:", bold: true }); ms(6, 3, 6, 4, {}); ms(6, 5, 6, 8, {}); ms(6, 9, 6, 13, {}); ws.getRow(6).height = 16;
+  // ROW 7
+  ms(7, 1, 7, 2,  { v: DISPATCH_FROM }); ms(7, 3, 7, 4, {}); ms(7, 5, 7, 8, {}); ms(7, 9, 7, 13, {}); ws.getRow(7).height = 22;
+  // ROW 8 spacer
+  ws.getRow(8).height = 5;
+
+  // ROWS 9-10: column headers
+  const doubleHeaders = [
+    [1, "Sr No"],
+    [2, "PART NO."],
+    [3, "PART DESCRIPTION"],
+    [4, "Qty per box"],
+    [5, "No of boxes"],
+    [6, "PART NET WT\n(KGS)"],
+    [7, "Pallet/Box\nweight"],
+    [8, "TOTAL NET WT\n(KGS)"],
+    [9, "TOTAL GROSS\nWEIGHT (KGS)"],
+    [13, "CBM"],
+  ];
+  doubleHeaders.forEach(([col, text]) => ms(9, col, 10, col, { v: text, bold: true, gray: true }));
+  ms(9, 10, 9, 12, { v: "Dimensions (CM)", bold: true, gray: true });
+  [["L", 10], ["W", 11], ["H", 12]].forEach(([label, col]) => sc(10, col, { v: label, bold: true, gray: true }));
+  ws.getRow(9).height = 22;
+  ws.getRow(10).height = 22;
+
+  // DATA ROWS — sequential Sr No 1..N
+  let nextRow = 11;
+  let grandQty = 0, grandNetWt = 0, grandGrossWt = 0, grandCBM = 0;
+  let srNo = 0; // sequential counter for all boxes
+
+  boxes.forEach((box) => {
+    srNo++;
+    const l = Number(box.length || 0);
+    const w = Number(box.width  || 0);
+    const h = Number(box.height || 0);
+    const cbm = (l && w && h) ? parseFloat((l * w * h / 1_000_000).toFixed(4)) : 0;
+    const items = box.items || [];
+
+    let boxNetWt = 0;
+    items.forEach(item => { boxNetWt += Number(item.qty || 0) * Number(skuInfoMap[item.sku]?.part_net_wt || 0); });
+    boxNetWt = parseFloat(boxNetWt.toFixed(3));
+    const palletWt   = 0;
+    const boxGrossWt = parseFloat((boxNetWt + palletWt).toFixed(3));
+
+    grandQty     += items.reduce((s, i) => s + Number(i.qty || 0), 0);
+    grandNetWt   += boxNetWt;
+    grandGrossWt += boxGrossWt;
+    grandCBM     += cbm;
+
+    const firstRow = nextRow;
+
+    if (items.length === 0) {
+      // Box with no items — write a single blank row
+      const rn = nextRow;
+      const cell = (col, val, opts = {}) => {
+        const c = ws.getCell(rn, col);
+        c.value = val; c.border = BD;
+        c.alignment = opts.left ? { horizontal: "left", vertical: "middle" } : { horizontal: "center", vertical: "middle" };
+        if (opts.bold) c.font = { bold: true };
+      };
+      cell(1, srNo); cell(2, ""); cell(3, ""); cell(4, ""); cell(5, 1);
+      cell(6, ""); cell(7, palletWt); cell(8, boxNetWt || ""); cell(9, boxGrossWt || "");
+      cell(10, l || ""); cell(11, w || ""); cell(12, h || ""); cell(13, cbm || "");
+      ws.getRow(rn).height = 16;
+      nextRow++;
+    } else {
+      items.forEach((item, idx) => {
+        const info   = skuInfoMap[item.sku] || {};
+        const qty    = Number(item.qty || 0);
+        const partWt = Number(info.part_net_wt || 0);
+        const rn     = nextRow;
+
+        const cell = (col, val, opts = {}) => {
+          const c = ws.getCell(rn, col);
+          c.value = val; c.border = BD;
+          c.alignment = opts.left ? { horizontal: "left", vertical: "middle" } : { horizontal: "center", vertical: "middle" };
+          if (opts.bold) c.font = { bold: true };
+        };
+
+        if (idx === 0) cell(1, srNo);
+        else ws.getCell(rn, 1).border = BD;
+
+        cell(2, item.sku || "");
+        cell(3, info.description || "", { left: true });
+        cell(4, qty || "");
+        cell(5, 1);
+        cell(6, partWt || "");
+
+        if (idx === 0) {
+          cell(7, palletWt); cell(8, boxNetWt || ""); cell(9, boxGrossWt || "");
+          cell(10, l || ""); cell(11, w || ""); cell(12, h || ""); cell(13, cbm || "");
+        } else {
+          [7, 8, 9, 10, 11, 12, 13].forEach(c => { ws.getCell(rn, c).border = BD; });
+        }
+
+        ws.getRow(rn).height = 16;
+        nextRow++;
+      });
+
+      // Merge box-level columns for multi-item boxes
+      if (items.length > 1) {
+        const lastRow = nextRow - 1;
+        [1, 7, 8, 9, 10, 11, 12, 13].forEach(col => {
+          ws.mergeCells(firstRow, col, lastRow, col);
+          const c = ws.getCell(firstRow, col);
+          c.alignment = { horizontal: "center", vertical: "middle" };
+          c.border = BD;
+        });
+      }
+    }
+  });
+
+  // TOTALS ROW
+  const TR = nextRow;
+  const totals = {
+    1: boxes.length,
+    4: grandQty,
+    8: parseFloat(grandNetWt.toFixed(3)),
+    9: parseFloat(grandGrossWt.toFixed(3)),
+    13: parseFloat(grandCBM.toFixed(4)),
+  };
+  for (let c = 1; c <= 13; c++) {
+    const cell = ws.getCell(TR, c);
+    cell.value     = totals[c] ?? "";
+    cell.font      = { bold: true };
+    cell.border    = BD;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+  }
+  ws.getRow(TR).height = 18;
+
+  const dateStr = new Date().toISOString().slice(0, 10);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="PackingList_${outwardId}_${dateStr}.xlsx"`);
+  await wb.xlsx.write(res);
+  res.end();
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  EXPORT JOIN ORDER  ─  Raw flat Excel dump of the outward_order_joins record
+//  (no formatting — for debugging)
+// ─────────────────────────────────────────────────────────────────────────────
+exports.exportJoin = async (req, res) => {
+  const outwardId = req.params.id;
+  const db = await getDb();
+
+  const outward = await db.collection("outwards").findOne({ outward_id: outwardId });
+  if (!outward) return sendError(res, "Outward not found", 404);
+
+  const join = await db.collection("outward_order_joins").findOne({ outward_id: outwardId });
+  if (!join) return sendError(res, "No join order found for this outward", 404);
+
+  // ── Build flat rows from fulfilled_items ──────────────────────────────────
+  const fulfilled = join.fulfilled_items || [];
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Join Order");
+
+  // Header row
+  ws.columns = [
+    { header: "Join Order ID",  key: "join_order_id",  width: 20 },
+    { header: "Outward ID",     key: "outward_id",     width: 20 },
+    { header: "Buyer ID",       key: "buyer_id",       width: 26 },
+    { header: "Order ID",       key: "order_id",       width: 28 },
+    { header: "Order Number",   key: "order_number",   width: 18 },
+    { header: "Part Number",    key: "part_number",    width: 20 },
+    { header: "Description",   key: "description",    width: 30 },
+    { header: "Brand",          key: "brand",          width: 16 },
+    { header: "Qty Fulfilled",  key: "qty_fulfilled",  width: 14 },
+    { header: "Rate",           key: "rate",           width: 12 },
+    { header: "Currency",       key: "currency",       width: 10 },
+    { header: "Created At",     key: "created_at",     width: 20 },
+    { header: "Updated At",     key: "updated_at",     width: 20 },
+  ];
+
+  // Bold header row
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
+
+  if (fulfilled.length === 0) {
+    ws.addRow({
+      join_order_id: join.join_order_id || "",
+      outward_id:   outwardId,
+      buyer_id:     join.buyer_id?.toString() || "",
+      order_id:     "", order_number: "", part_number: "(no items)",
+      description: "", brand: "", qty_fulfilled: "", rate: "", currency: "",
+      created_at: join.created_at ? new Date(join.created_at).toISOString() : "",
+      updated_at: join.updated_at ? new Date(join.updated_at).toISOString() : "",
+    });
+  } else {
+    fulfilled.forEach(fi => {
+      ws.addRow({
+        join_order_id: join.join_order_id || "",
+        outward_id:   outwardId,
+        buyer_id:     join.buyer_id?.toString() || "",
+        order_id:     fi.order_id || "",
+        order_number: fi.order_number || "",
+        part_number:  fi.part_number || "",
+        description:  fi.description || "",
+        brand:        fi.brand || "",
+        qty_fulfilled: Number(fi.qty_fulfilled) || 0,
+        rate:         Number(fi.rate) || "",
+        currency:     fi.currency || "",
+        created_at:   join.created_at ? new Date(join.created_at).toISOString() : "",
+        updated_at:   join.updated_at ? new Date(join.updated_at).toISOString() : "",
+      });
+    });
+  }
+
+  const dateStr = new Date().toISOString().slice(0, 10);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="JoinOrder_${outwardId}_${dateStr}.xlsx"`);
+  await wb.xlsx.write(res);
+  res.end();
 };

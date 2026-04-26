@@ -15,6 +15,8 @@ router.get("/joins", asyncHandler(joinCtrl.listJoins));
 router.get("/", asyncHandler(ctrl.list));
 router.get("/:id/buyer-orders", asyncHandler(ctrl.getOutwardBuyerOrders));
 router.get("/:id/join", asyncHandler(joinCtrl.getJoin));
+router.get("/:id/export-packing-list", asyncHandler(ctrl.exportPackingList));
+router.get("/:id/export-join", asyncHandler(ctrl.exportJoin));
 router.post("/:id/join", asyncHandler(joinCtrl.saveJoin));
 router.get("/:id", asyncHandler(ctrl.getById));
 router.post("/", validate(createOutwardSchema), asyncHandler(ctrl.create));
