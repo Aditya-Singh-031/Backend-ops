@@ -2,6 +2,7 @@ const { v4: uuidv4 } = require("uuid");
 const ExcelJS = require("exceljs");
 const { getDb, toObjectId } = require("../config/db");
 const { sendSuccess, sendError } = require("../utils/response");
+const aiService = require("../services/ai.service");
 
 exports.list = async (_req, res) => {
   const db = await getDb();
@@ -453,24 +454,66 @@ exports.exportPackingList = async (req, res) => {
     try { shipment = await db.collection("shipments").findOne({ _id: toObjectId(outward.shipment_id) }); } catch {}
   }
 
-  // Fetch SKU descriptions from invoice_line_items
+  // Fetch SKU descriptions from invoice_line_items + product_master
   const skuSet = new Set();
   boxes.forEach(box => (box.items || []).forEach(i => { if (i.sku) skuSet.add(i.sku); }));
   const partNumbers = [...skuSet];
   let skuInfoMap = {};
   if (partNumbers.length > 0) {
+    // invoice_line_items first
     const lineItems = await db.collection("invoice_line_items")
       .find({ part_number: { $in: partNumbers } })
-      .project({ part_number: 1, description: 1, net_weight: 1, part_net_wt: 1, unit_weight: 1, _id: 0 })
+      .project({ part_number: 1, description: 1, net_weight: 1, part_net_wt: 1, unit_weight: 1, country_of_origin: 1, _id: 0 })
       .toArray();
     lineItems.forEach(li => {
       if (li.part_number && !skuInfoMap[li.part_number]) {
         skuInfoMap[li.part_number] = {
           description: li.description || "",
           part_net_wt: Number(li.part_net_wt || li.net_weight || li.unit_weight || 0),
+          country_of_origin: li.country_of_origin || "",
         };
       }
     });
+    // product_master fallback for missing net_wt / COO
+    const missingWt = partNumbers.filter(pn => !skuInfoMap[pn]?.part_net_wt || !skuInfoMap[pn]?.country_of_origin);
+    if (missingWt.length > 0) {
+      const pmItems = await db.collection("product_master")
+        .find({ part_number: { $in: missingWt }, is_deleted: { $ne: true } })
+        .project({ part_number: 1, part_net_wt: 1, country_of_origin: 1, _id: 0 })
+        .toArray();
+      pmItems.forEach(pm => {
+        if (pm.part_number) {
+          if (!skuInfoMap[pm.part_number]) skuInfoMap[pm.part_number] = { description: "", part_net_wt: 0, country_of_origin: "" };
+          if (!skuInfoMap[pm.part_number].part_net_wt) skuInfoMap[pm.part_number].part_net_wt = Number(pm.part_net_wt || 0);
+          if (!skuInfoMap[pm.part_number].country_of_origin) skuInfoMap[pm.part_number].country_of_origin = pm.country_of_origin || "";
+        }
+      });
+    }
+
+    // AI fallback for remaining missing weights / COO
+    const stillMissingWt = partNumbers.filter(pn => !skuInfoMap[pn]?.part_net_wt || !skuInfoMap[pn]?.country_of_origin);
+    if (stillMissingWt.length > 0) {
+      const aiResults = await aiService.fetchPartsInfoAI(stillMissingWt);
+      for (const res of aiResults) {
+        const pn = res.part_number;
+        if (!pn) continue;
+        if (!skuInfoMap[pn]) skuInfoMap[pn] = { description: "", part_net_wt: 0, country_of_origin: "" };
+        if (!skuInfoMap[pn].part_net_wt && res.part_net_wt) skuInfoMap[pn].part_net_wt = Number(res.part_net_wt);
+        if (!skuInfoMap[pn].country_of_origin && res.country_of_origin) skuInfoMap[pn].country_of_origin = res.country_of_origin;
+
+        // Persist AI findings into product_master
+        const updateSet = { updated_at: new Date() };
+        if (res.part_net_wt) updateSet.part_net_wt = Number(res.part_net_wt);
+        if (res.country_of_origin) updateSet.country_of_origin = res.country_of_origin;
+        if (Object.keys(updateSet).length > 1) {
+          await db.collection("product_master").updateOne(
+            { part_number: pn },
+            { $set: updateSet, $setOnInsert: { part_number: pn, is_deleted: false, created_at: new Date() } },
+            { upsert: true }
+          );
+        }
+      }
+    }
   }
 
   // ── Build workbook ───────────────────────────────────────────────────────
@@ -583,8 +626,7 @@ exports.exportPackingList = async (req, res) => {
     let boxNetWt = 0;
     items.forEach(item => { boxNetWt += Number(item.qty || 0) * Number(skuInfoMap[item.sku]?.part_net_wt || 0); });
     boxNetWt = parseFloat(boxNetWt.toFixed(3));
-    const palletWt   = 0;
-    const boxGrossWt = parseFloat((boxNetWt + palletWt).toFixed(3));
+    const boxGrossWt = parseFloat((boxNetWt * 1.1).toFixed(3));
 
     grandQty     += items.reduce((s, i) => s + Number(i.qty || 0), 0);
     grandNetWt   += boxNetWt;
@@ -603,7 +645,7 @@ exports.exportPackingList = async (req, res) => {
         if (opts.bold) c.font = { bold: true };
       };
       cell(1, srNo); cell(2, ""); cell(3, ""); cell(4, ""); cell(5, 1);
-      cell(6, ""); cell(7, palletWt); cell(8, boxNetWt || ""); cell(9, boxGrossWt || "");
+      cell(6, ""); cell(7, 0); cell(8, boxNetWt || ""); cell(9, boxGrossWt || "");
       cell(10, l || ""); cell(11, w || ""); cell(12, h || ""); cell(13, cbm || "");
       ws.getRow(rn).height = 16;
       nextRow++;
@@ -631,7 +673,7 @@ exports.exportPackingList = async (req, res) => {
         cell(6, partWt || "");
 
         if (idx === 0) {
-          cell(7, palletWt); cell(8, boxNetWt || ""); cell(9, boxGrossWt || "");
+          cell(7, 0); cell(8, boxNetWt || ""); cell(9, boxGrossWt || "");
           cell(10, l || ""); cell(11, w || ""); cell(12, h || ""); cell(13, cbm || "");
         } else {
           [7, 8, 9, 10, 11, 12, 13].forEach(c => { ws.getCell(rn, c).border = BD; });
@@ -656,11 +698,13 @@ exports.exportPackingList = async (req, res) => {
 
   // TOTALS ROW
   const TR = nextRow;
+  const finalNetWt   = parseFloat(grandNetWt.toFixed(3));
+  const finalGrossWt = parseFloat((finalNetWt * 1.1).toFixed(3));
   const totals = {
     1: boxes.length,
     4: grandQty,
-    8: parseFloat(grandNetWt.toFixed(3)),
-    9: parseFloat(grandGrossWt.toFixed(3)),
+    8: finalNetWt,
+    9: finalGrossWt,
     13: parseFloat(grandCBM.toFixed(4)),
   };
   for (let c = 1; c <= 13; c++) {
@@ -680,8 +724,8 @@ exports.exportPackingList = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  EXPORT JOIN ORDER  ─  Raw flat Excel dump of the outward_order_joins record
-//  (no formatting — for debugging)
+//  EXPORT JOIN ORDER  ─  Enriched Excel dump with PI number, HSN code,
+//  part net weight, country of origin, and auto-filled description
 // ─────────────────────────────────────────────────────────────────────────────
 exports.exportJoin = async (req, res) => {
   const outwardId = req.params.id;
@@ -693,62 +737,139 @@ exports.exportJoin = async (req, res) => {
   const join = await db.collection("outward_order_joins").findOne({ outward_id: outwardId });
   if (!join) return sendError(res, "No join order found for this outward", 404);
 
-  // ── Build flat rows from fulfilled_items ──────────────────────────────────
   const fulfilled = join.fulfilled_items || [];
 
+  // ── 1. Gather part numbers for enrichment lookups ──────────────────────────
+  const partNumbers = [...new Set(fulfilled.map(fi => (fi.part_number || "").trim()).filter(Boolean))];
+
+  // ── 2. HSN code, description, net_wt, COO from invoice_line_items ─────────
+  const lineItemMap = {}; // part_number → { hsn_code, description, part_net_wt, country_of_origin }
+  if (partNumbers.length > 0) {
+    const lineItems = await db.collection("invoice_line_items")
+      .find({ part_number: { $in: partNumbers } })
+      .project({ part_number: 1, description: 1, hsn_code: 1, net_weight: 1, part_net_wt: 1, unit_weight: 1, country_of_origin: 1, _id: 0 })
+      .toArray();
+    lineItems.forEach(li => {
+      if (li.part_number && !lineItemMap[li.part_number]) {
+        lineItemMap[li.part_number] = {
+          hsn_code: li.hsn_code || "",
+          description: li.description || "",
+          part_net_wt: Number(li.part_net_wt || li.net_weight || li.unit_weight || 0),
+          country_of_origin: li.country_of_origin || "",
+        };
+      }
+    });
+  }
+
+  // ── 3. product_master fallback for net_wt / COO / description ─────────────
+  const missingFromInvoice = partNumbers.filter(pn => !lineItemMap[pn]?.part_net_wt || !lineItemMap[pn]?.country_of_origin);
+  if (missingFromInvoice.length > 0) {
+    const pmItems = await db.collection("product_master")
+      .find({ part_number: { $in: missingFromInvoice }, is_deleted: { $ne: true } })
+      .project({ part_number: 1, part_net_wt: 1, country_of_origin: 1, description: 1, _id: 0 })
+      .toArray();
+    pmItems.forEach(pm => {
+      if (!pm.part_number) return;
+      if (!lineItemMap[pm.part_number]) lineItemMap[pm.part_number] = { hsn_code: "", description: "", part_net_wt: 0, country_of_origin: "" };
+      if (!lineItemMap[pm.part_number].part_net_wt) lineItemMap[pm.part_number].part_net_wt = Number(pm.part_net_wt || 0);
+      if (!lineItemMap[pm.part_number].country_of_origin) lineItemMap[pm.part_number].country_of_origin = pm.country_of_origin || "";
+      if (!lineItemMap[pm.part_number].description) lineItemMap[pm.part_number].description = pm.description || "";
+    });
+  }
+
+  // ── 3.5. AI fallback for remaining missing weights / COO ───────────────
+  const stillMissing = partNumbers.filter(pn => !lineItemMap[pn]?.part_net_wt || !lineItemMap[pn]?.country_of_origin);
+  if (stillMissing.length > 0) {
+    const aiResults = await aiService.fetchPartsInfoAI(stillMissing);
+    aiResults.forEach(res => {
+      const pn = res.part_number;
+      if (!pn) return;
+      if (!lineItemMap[pn]) lineItemMap[pn] = { hsn_code: "", description: "", part_net_wt: 0, country_of_origin: "" };
+      if (!lineItemMap[pn].part_net_wt && res.part_net_wt) lineItemMap[pn].part_net_wt = Number(res.part_net_wt);
+      if (!lineItemMap[pn].country_of_origin && res.country_of_origin) lineItemMap[pn].country_of_origin = res.country_of_origin;
+    });
+  }
+
+  // ── 4. Persist part_net_wt + country_of_origin into product_master ────────
+  for (const pn of partNumbers) {
+    const info = lineItemMap[pn];
+    if (!info) continue;
+    const updateSet = { updated_at: new Date() };
+    if (info.part_net_wt) updateSet.part_net_wt = info.part_net_wt;
+    if (info.country_of_origin) updateSet.country_of_origin = info.country_of_origin;
+    if (Object.keys(updateSet).length > 1) {
+      await db.collection("product_master").updateOne(
+        { part_number: pn },
+        { $set: updateSet, $setOnInsert: { part_number: pn, is_deleted: false, created_at: new Date() } },
+        { upsert: true }
+      );
+    }
+  }
+
+  // ── 5. PI numbers per order ────────────────────────────────────────────────
+  const orderIdStrs = [...new Set(fulfilled.map(fi => fi.order_id).filter(Boolean))];
+  const piMap = {}; // order_id (string) → pi_number
+  if (orderIdStrs.length > 0) {
+    const orderOids = orderIdStrs.map(id => toObjectId(id)).filter(Boolean);
+    const orders = await db.collection("orders")
+      .find({ _id: { $in: orderOids } })
+      .project({ _id: 1, pi_number: 1, order_number: 1, _id: 1 })
+      .toArray();
+    orders.forEach(o => { piMap[o._id.toString()] = o.pi_number || o.order_number || ""; });
+  }
+
+  // ── 6. Build workbook ─────────────────────────────────────────────────────
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Join Order");
 
-  // Header row
   ws.columns = [
-    { header: "Join Order ID",  key: "join_order_id",  width: 20 },
-    { header: "Outward ID",     key: "outward_id",     width: 20 },
-    { header: "Buyer ID",       key: "buyer_id",       width: 26 },
-    { header: "Order ID",       key: "order_id",       width: 28 },
-    { header: "Order Number",   key: "order_number",   width: 18 },
-    { header: "Part Number",    key: "part_number",    width: 20 },
-    { header: "Description",   key: "description",    width: 30 },
-    { header: "Brand",          key: "brand",          width: 16 },
-    { header: "Qty Fulfilled",  key: "qty_fulfilled",  width: 14 },
-    { header: "Rate",           key: "rate",           width: 12 },
-    { header: "Currency",       key: "currency",       width: 10 },
-    { header: "Created At",     key: "created_at",     width: 20 },
-    { header: "Updated At",     key: "updated_at",     width: 20 },
+    { header: "Join Order ID",        key: "join_order_id",      width: 20 },
+    { header: "Outward ID",           key: "outward_id",          width: 20 },
+    { header: "Order Number",         key: "order_number",        width: 18 },
+    { header: "PI Number",            key: "pi_number",           width: 18 },
+    { header: "Part Number",          key: "part_number",         width: 20 },
+    { header: "Description",          key: "description",         width: 35 },
+    { header: "HSN Code",             key: "hsn_code",            width: 14 },
+    { header: "Brand",                key: "brand",               width: 16 },
+    { header: "Qty Fulfilled",        key: "qty_fulfilled",       width: 14 },
+    { header: "Part Net Wt (kg)",     key: "part_net_wt",         width: 16 },
+    { header: "Total Net Wt (kg)",    key: "total_net_wt",        width: 18 },
+    { header: "Country of Origin",    key: "country_of_origin",   width: 18 },
+    { header: "Rate",                 key: "rate",                width: 12 },
+    { header: "Currency",             key: "currency",            width: 10 },
+    { header: "Created At",           key: "created_at",          width: 20 },
   ];
 
-  // Bold header row
   ws.getRow(1).font = { bold: true };
   ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9D9D9" } };
 
-  if (fulfilled.length === 0) {
+  const addRows = fulfilled.length === 0 ? [{ part_number: "(no items)" }] : fulfilled;
+
+  addRows.forEach(fi => {
+    const pn = (fi.part_number || "").trim();
+    const info = lineItemMap[pn] || {};
+    const partNetWt = info.part_net_wt || 0;
+    const qtyFulfilled = Number(fi.qty_fulfilled) || 0;
+    const piNum = fi.order_id ? (piMap[fi.order_id] || "") : "";
+    const desc = fi.description || info.description || "Auto Parts";
     ws.addRow({
-      join_order_id: join.join_order_id || "",
-      outward_id:   outwardId,
-      buyer_id:     join.buyer_id?.toString() || "",
-      order_id:     "", order_number: "", part_number: "(no items)",
-      description: "", brand: "", qty_fulfilled: "", rate: "", currency: "",
-      created_at: join.created_at ? new Date(join.created_at).toISOString() : "",
-      updated_at: join.updated_at ? new Date(join.updated_at).toISOString() : "",
+      join_order_id:    join.join_order_id || "",
+      outward_id:       outwardId,
+      order_number:     fi.order_number || "",
+      pi_number:        piNum,
+      part_number:      pn,
+      description:      desc,
+      hsn_code:         info.hsn_code || "",
+      brand:            fi.brand || "",
+      qty_fulfilled:    qtyFulfilled,
+      part_net_wt:      partNetWt || "",
+      total_net_wt:     partNetWt && qtyFulfilled ? parseFloat((partNetWt * qtyFulfilled).toFixed(3)) : "",
+      country_of_origin: info.country_of_origin || "",
+      rate:             Number(fi.rate) || "",
+      currency:         fi.currency || "",
+      created_at:       join.created_at ? new Date(join.created_at).toISOString() : "",
     });
-  } else {
-    fulfilled.forEach(fi => {
-      ws.addRow({
-        join_order_id: join.join_order_id || "",
-        outward_id:   outwardId,
-        buyer_id:     join.buyer_id?.toString() || "",
-        order_id:     fi.order_id || "",
-        order_number: fi.order_number || "",
-        part_number:  fi.part_number || "",
-        description:  fi.description || "",
-        brand:        fi.brand || "",
-        qty_fulfilled: Number(fi.qty_fulfilled) || 0,
-        rate:         Number(fi.rate) || "",
-        currency:     fi.currency || "",
-        created_at:   join.created_at ? new Date(join.created_at).toISOString() : "",
-        updated_at:   join.updated_at ? new Date(join.updated_at).toISOString() : "",
-      });
-    });
-  }
+  });
 
   const dateStr = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

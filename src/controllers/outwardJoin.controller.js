@@ -62,47 +62,67 @@ exports.getJoin = async (req, res) => {
   // No single order_id on join — buyer-based
   // orderDetail is derived from fulfilled_items per-order if needed
 
-  // ── Enrich fulfilled_items descriptions from invoice_line_items ──
-  // Direct lookup by part_number — no chain needed
+  // ── Enrich from invoice_line_items and product_master ──
   let enrichedFulfilledItems = join.fulfilled_items || [];
+  const skuInfoMap = {};
 
   try {
-    const partNumbers = enrichedFulfilledItems
-      .map((fi) => (fi.part_number || "").trim())
-      .filter(Boolean);
+    const outward = await db.collection("outwards").findOne({ outward_id: id });
+    const partNumbersSet = new Set(enrichedFulfilledItems.map(fi => (fi.part_number || "").trim()).filter(Boolean));
+    (outward?.boxes || []).forEach(b => (b.items || []).forEach(i => { if (i.sku) partNumbersSet.add(i.sku.trim()); }));
+    const partNumbers = [...partNumbersSet];
 
     if (partNumbers.length > 0) {
-      const lineItems = await db
-        .collection("invoice_line_items")
+      const lineItems = await db.collection("invoice_line_items")
         .find({ part_number: { $in: partNumbers } })
-        .project({ part_number: 1, description: 1, _id: 0 })
+        .project({ part_number: 1, description: 1, part_net_wt: 1, net_weight: 1, unit_weight: 1, country_of_origin: 1, _id: 0 })
         .toArray();
-
-      // part_number → description map (last match wins)
-      const descMap = {};
+      const invoiceMap = {};
       lineItems.forEach((li) => {
-        if (li.part_number && li.description) {
-          descMap[li.part_number.trim()] = li.description;
-        }
+        if (li.part_number) invoiceMap[li.part_number.trim()] = li;
+      });
+
+      const pmItems = await db.collection("product_master")
+        .find({ part_number: { $in: partNumbers }, is_deleted: { $ne: true } })
+        .project({ part_number: 1, part_net_wt: 1, country_of_origin: 1, description: 1, _id: 0 })
+        .toArray();
+      const pmMap = {};
+      pmItems.forEach(pm => {
+        if (pm.part_number) pmMap[pm.part_number.trim()] = pm;
+      });
+
+      partNumbers.forEach(pn => {
+        const inv = invoiceMap[pn] || {};
+        const pm = pmMap[pn] || {};
+        skuInfoMap[pn] = {
+          description: inv.description || pm.description || "",
+          part_net_wt: Number(inv.part_net_wt || inv.net_weight || inv.unit_weight || pm.part_net_wt || 0),
+          country_of_origin: inv.country_of_origin || pm.country_of_origin || "",
+          source: inv.description ? "invoice" : pm.description ? "product_master" : "none"
+        };
       });
 
       enrichedFulfilledItems = enrichedFulfilledItems.map((fi) => {
-        const invoiceDesc = descMap[(fi.part_number || "").trim()];
+        const pn = (fi.part_number || "").trim();
+        const info = skuInfoMap[pn] || {};
         return {
           ...fi,
-          description: invoiceDesc || fi.description || "",
-          description_source: invoiceDesc ? "invoice" : "join",
+          description: info.description || fi.description || "",
+          description_source: info.source !== "none" ? info.source : "join",
+          part_net_wt: info.part_net_wt || fi.part_net_wt || 0,
+          country_of_origin: info.country_of_origin || fi.country_of_origin || ""
         };
       });
     }
   } catch (err) {
-    console.warn("[getJoin] Could not enrich descriptions from invoice_line_items:", err.message);
+    console.warn("[getJoin] Could not enrich descriptions/weights:", err.message);
   }
 
   sendSuccess(res, {
     ...join,
     fulfilled_items: enrichedFulfilledItems,
     buyer_order_stats: await getBuyerOrderStats(db, join.buyer_id, enrichedFulfilledItems),
+    sku_info_map: skuInfoMap,
   });
 };
 
@@ -289,6 +309,110 @@ exports.saveJoin = async (req, res) => {
 
   const savedJoin = await db.collection("outward_order_joins").findOne({ outward_id: id });
   sendSuccess(res, { join: savedJoin });
+};
+
+/**
+ * POST /outwards/:id/trigger-ai
+ * Manually trigger AI fetching for missing metadata for a joined order
+ */
+exports.triggerAiProcessing = async (req, res) => {
+  const { id } = req.params;
+  const dbInstance = await getDb();
+  
+  // Quick validation
+  const joinOrder = await dbInstance.collection("outward_order_joins").findOne({ outward_id: id });
+  if (!joinOrder) return sendError(res, "Join order not found", 404);
+
+  const outward = await dbInstance.collection("outwards").findOne({ outward_id: id });
+  if (!outward) return sendError(res, "Outward not found", 404);
+
+  // Mark as processing immediately
+  await dbInstance.collection("outward_order_joins").updateOne(
+    { outward_id: id },
+    { $set: { ai_status: 'processing' } }
+  );
+
+  sendSuccess(res, { message: "AI processing started in background" });
+
+  // Run the AI logic in the background
+  (async () => {
+    try {
+      const cleanFulfilled = joinOrder.fulfilled_items || [];
+      const skuSet = new Set(cleanFulfilled.map(f => f.part_number).filter(Boolean));
+      (outward.boxes || []).forEach(b => (b.items || []).forEach(i => { if (i.sku) skuSet.add(i.sku); }));
+      const allSkus = [...skuSet];
+      
+      if (allSkus.length > 0) {
+        const lineItems = await dbInstance.collection("invoice_line_items")
+          .find({ part_number: { $in: allSkus } })
+          .project({ part_number: 1, part_net_wt: 1, net_weight: 1, unit_weight: 1, country_of_origin: 1 })
+          .toArray();
+        const liMap = {};
+        lineItems.forEach((li) => {
+          if (li.part_number) liMap[li.part_number] = {
+            part_net_wt: Number(li.part_net_wt || li.net_weight || li.unit_weight || 0),
+            country_of_origin: li.country_of_origin || ""
+          };
+        });
+
+        const missingFromInvoice = allSkus.filter(pn => !liMap[pn]?.part_net_wt || !liMap[pn]?.country_of_origin);
+        if (missingFromInvoice.length > 0) {
+          const pmItems = await dbInstance.collection("product_master")
+            .find({ part_number: { $in: missingFromInvoice }, is_deleted: { $ne: true } })
+            .project({ part_number: 1, part_net_wt: 1, country_of_origin: 1 })
+            .toArray();
+          const pmMap = {};
+          pmItems.forEach(pm => { if (pm.part_number) pmMap[pm.part_number] = pm; });
+
+          const completelyMissing = missingFromInvoice.filter(pn => !pmMap[pn]?.part_net_wt || !pmMap[pn]?.country_of_origin);
+          
+          if (completelyMissing.length > 0) {
+            const aiService = require("../services/ai.service");
+            const aiResults = await aiService.fetchPartsInfoAI(completelyMissing);
+            for (const res of aiResults) {
+              if (!res.part_number) continue;
+              const updateSet = { updated_at: new Date() };
+              if (res.part_net_wt) updateSet.part_net_wt = Number(res.part_net_wt);
+              if (res.country_of_origin) updateSet.country_of_origin = res.country_of_origin;
+              
+              if (Object.keys(updateSet).length > 1) {
+                await dbInstance.collection("product_master").updateOne(
+                  { part_number: res.part_number },
+                  { $set: updateSet, $setOnInsert: { part_number: res.part_number, is_deleted: false, created_at: new Date() } },
+                  { upsert: true }
+                );
+              }
+            }
+
+            await dbInstance.collection("outward_order_joins").updateOne(
+              { outward_id: id },
+              { $set: { ai_status: 'completed' } }
+            );
+          } else {
+            // No missing parts, instantly completed
+            await dbInstance.collection("outward_order_joins").updateOne(
+              { outward_id: id },
+              { $set: { ai_status: 'completed' } }
+            );
+          }
+        } else {
+            // No missing parts from invoice
+            await dbInstance.collection("outward_order_joins").updateOne(
+              { outward_id: id },
+              { $set: { ai_status: 'completed' } }
+            );
+        }
+      }
+    } catch (err) {
+      console.error("Background AI processing error:", err);
+      try {
+        await dbInstance.collection("outward_order_joins").updateOne(
+          { outward_id: id },
+          { $set: { ai_status: 'failed' } }
+        );
+      } catch (e) {}
+    }
+  })();
 };
 
 /**

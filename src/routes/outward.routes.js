@@ -18,6 +18,7 @@ router.get("/:id/join", asyncHandler(joinCtrl.getJoin));
 router.get("/:id/export-packing-list", asyncHandler(ctrl.exportPackingList));
 router.get("/:id/export-join", asyncHandler(ctrl.exportJoin));
 router.post("/:id/join", asyncHandler(joinCtrl.saveJoin));
+router.post("/:id/trigger-ai", asyncHandler(joinCtrl.triggerAiProcessing));
 router.get("/:id", asyncHandler(ctrl.getById));
 router.post("/", validate(createOutwardSchema), asyncHandler(ctrl.create));
 router.patch("/:id", validate(updateOutwardSchema), asyncHandler(ctrl.update));
