@@ -11,35 +11,66 @@ exports.getBrandParts = async (req, res) => {
   const limit = 50; 
   const skip = (page - 1) * limit;
 
+  // Added search capability for Step 3 later!
+  const searchQuery = req.query.search || "";
+  let query = { brand_id: new ObjectId(id) };
+  
+  if (searchQuery) {
+    query.$or = [
+      { part_number_clean: { $regex: searchQuery.replace(/\s+/g, "").toUpperCase() } },
+      { part_number_original: { $regex: searchQuery, $options: "i" } },
+      { description: { $regex: searchQuery, $options: "i" } }
+    ];
+  }
+
   const parts = await db.collection("parts")
-    .find({ brand_id: new ObjectId(id) })
+    .find(query)
     .sort({ part_number_clean: 1 })
     .skip(skip)
     .limit(limit)
     .toArray();
 
-  const total = await db.collection("parts").countDocuments({ brand_id: new ObjectId(id) });
+  const total = await db.collection("parts").countDocuments(query);
   sendSuccess(res, { parts, total, page, totalPages: Math.ceil(total / limit) });
 };
 
-exports.uploadPriceList = async (req, res) => {
-  if (!req.file) return res.status(400).json({ success: false, error: "No Excel file uploaded" });
-  
+// 💥 UPGRADED: Streaming Upload with Price History, Vendor, and GST Logic
+exports.uploadPriceListStream = async (req, res) => {
   try {
-    const brand_id = req.body.brand_id;
-    if (!brand_id) throw new Error("Brand ID is required");
+    const { brand_id, partsChunk, isFinal, vendor_name, gst_rate } = req.body;
+    
+    if (!brand_id || !Array.isArray(partsChunk)) {
+      return res.status(400).json({ success: false, error: "Invalid payload stream" });
+    }
+
+    // GST Validation Logic
+    let parsedGst = 0.18; // Default 18%
+    if (gst_rate !== undefined && gst_rate !== "") {
+      parsedGst = parseFloat(gst_rate);
+      if (parsedGst >= 1 || parsedGst < 0) {
+         return res.status(400).json({ success: false, error: "GST must be a decimal less than 1 (e.g., 0.18 for 18%)" });
+      }
+    }
 
     const db = await getDb();
-    
-    // Strip out heavy styles to protect RAM
-    const workbook = xlsx.readFile(req.file.path, { cellDates: true, cellFormula: false, cellHTML: false, cellStyles: false });
-    const sheetName = workbook.SheetNames[0];
-    const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
-
     let bulkOps = [];
     let validRows = 0;
 
-    for (const row of data) {
+    // Fast lookup of existing parts in this chunk to track price history
+    const cleanPartsList = partsChunk.map(r => {
+      const p = r["Part Number"] || r["Part No"] || r["Part #"] || r["part_number"] || r["Part No."];
+      return p ? String(p).replace(/\s+/g, "").toUpperCase() : null;
+    }).filter(Boolean);
+
+    const existingParts = await db.collection("parts").find({
+      brand_id: new ObjectId(brand_id),
+      part_number_clean: { $in: cleanPartsList }
+    }).toArray();
+
+    const existingMap = {};
+    existingParts.forEach(p => existingMap[p.part_number_clean] = p);
+
+    for (const row of partsChunk) {
       const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"] || row["Part No."];
       const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"] || row["Base MRP"];
       const descRaw = row["Description"] || row["Desc"] || row["Part Name"] || "";
@@ -50,39 +81,56 @@ exports.uploadPriceList = async (req, res) => {
       const mrp = parseFloat(String(mrpRaw).replace(/,/g, ""));
       if (isNaN(mrp)) continue;
 
+      const existingPart = existingMap[cleanPart];
+      let history = existingPart?.price_history || [];
+
+      // If part exists and the price has changed, push the old data to history
+      if (existingPart && existingPart.mrp !== mrp) {
+        history.push({
+          mrp: existingPart.mrp,
+          vendor: existingPart.vendor_name || "Unknown",
+          date: existingPart.updated_at || new Date()
+        });
+      }
+
       bulkOps.push({
         updateOne: {
           filter: { brand_id: new ObjectId(brand_id), part_number_clean: cleanPart },
-          update: { $set: { part_number_original: String(partRaw), description: String(descRaw), mrp: mrp, updated_at: new Date() } },
+          update: { 
+            $set: { 
+              part_number_original: String(partRaw), 
+              description: String(descRaw), 
+              mrp: mrp, 
+              gst_rate: parsedGst,
+              vendor_name: vendor_name || "Unknown Vendor",
+              updated_at: new Date(),
+              price_history: history
+            } 
+          },
           upsert: true
         }
       });
       validRows++;
-
-      // Safely chunk the database inserts
-      if (bulkOps.length >= 500) {
-        await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
-        bulkOps = []; 
-      }
     }
 
     if (bulkOps.length > 0) {
       await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
     }
 
-    const totalParts = await db.collection("parts").countDocuments({ brand_id: new ObjectId(brand_id) });
-    await db.collection("brands").updateOne({ _id: new ObjectId(brand_id) }, { $set: { total_parts: totalParts } });
-    const finalBrand = await db.collection("brands").findOne({ _id: new ObjectId(brand_id) });
+    let finalBrand = null;
+    if (isFinal) {
+       const totalParts = await db.collection("parts").countDocuments({ brand_id: new ObjectId(brand_id) });
+       await db.collection("brands").updateOne({ _id: new ObjectId(brand_id) }, { $set: { total_parts: totalParts } });
+       finalBrand = await db.collection("brands").findOne({ _id: new ObjectId(brand_id) });
+    }
 
-    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-    sendSuccess(res, { message: `Mapped ${validRows} parts!`, brand: { ...finalBrand, id: finalBrand._id.toString() } });
-
+    sendSuccess(res, { mapped: validRows, brand: finalBrand ? { ...finalBrand, id: finalBrand._id.toString() } : null });
   } catch (err) {
-    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     res.status(500).json({ success: false, error: err.message });
   }
 };
 
+// 💥 UPGRADED: Apply Dynamic GST, Remove MRP, and Log History
 exports.downloadPriceList = async (req, res) => {
   try {
     const { brand_id, buyer_name, discount_percent, currency, exchange_rate } = req.body;
@@ -96,7 +144,8 @@ exports.downloadPriceList = async (req, res) => {
     const rate = parseFloat(exchange_rate) || 1;
 
     const exportData = parts.map(p => {
-      const baseNoGst = p.mrp / 1.18;
+      const partGst = p.gst_rate !== undefined ? p.gst_rate : 0.18; // Use dynamic GST
+      const baseNoGst = p.mrp / (1 + partGst); // Formula updated for variable GST
       const discounted = baseNoGst * (1 - (discount / 100));
       const finalPrice = discounted / rate;
 
@@ -104,9 +153,21 @@ exports.downloadPriceList = async (req, res) => {
         "Brand": brand.name,
         "Part Number": p.part_number_original,
         "Description": p.description,
-        "Base MRP (INR)": p.mrp,
+        // Notice: "Base MRP" has been removed!
         [`Net Price (${currency})`]: parseFloat(finalPrice.toFixed(2))
       };
+    });
+
+    // 💥 Log this action to download history
+    await db.collection("download_history").insertOne({
+      brand_id: new ObjectId(brand_id),
+      brand_name: brand.name,
+      buyer_name: buyer_name,
+      discount_percent: discount,
+      currency: currency,
+      exchange_rate: rate,
+      total_items: parts.length,
+      downloaded_at: new Date()
     });
 
     const ws = xlsx.utils.json_to_sheet(exportData);
@@ -121,54 +182,13 @@ exports.downloadPriceList = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-// 💥 NEW: Streaming JSON Handler (Bypasses Nginx file limits entirely)
-exports.uploadPriceListStream = async (req, res) => {
+
+// 💥 NEW: Fetch Download History
+exports.getDownloadHistory = async (req, res) => {
   try {
-    const { brand_id, partsChunk, isFinal } = req.body;
-    
-    if (!brand_id || !Array.isArray(partsChunk)) {
-      return res.status(400).json({ success: false, error: "Invalid payload stream" });
-    }
-
     const db = await getDb();
-    let bulkOps = [];
-    let validRows = 0;
-
-    for (const row of partsChunk) {
-      // Flexibly match columns
-      const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"] || row["Part No."];
-      const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"] || row["Base MRP"];
-      const descRaw = row["Description"] || row["Desc"] || row["Part Name"] || "";
-
-      if (!partRaw || mrpRaw === undefined || mrpRaw === "") continue;
-
-      const cleanPart = String(partRaw).replace(/\s+/g, "").toUpperCase();
-      const mrp = parseFloat(String(mrpRaw).replace(/,/g, ""));
-      if (isNaN(mrp)) continue;
-
-      bulkOps.push({
-        updateOne: {
-          filter: { brand_id: new ObjectId(brand_id), part_number_clean: cleanPart },
-          update: { $set: { part_number_original: String(partRaw), description: String(descRaw), mrp: mrp, updated_at: new Date() } },
-          upsert: true
-        }
-      });
-      validRows++;
-    }
-
-    if (bulkOps.length > 0) {
-      await db.collection("parts").bulkWrite(bulkOps, { ordered: false });
-    }
-
-    let finalBrand = null;
-    // Only update the heavy counting logic on the very last chunk!
-    if (isFinal) {
-       const totalParts = await db.collection("parts").countDocuments({ brand_id: new ObjectId(brand_id) });
-       await db.collection("brands").updateOne({ _id: new ObjectId(brand_id) }, { $set: { total_parts: totalParts } });
-       finalBrand = await db.collection("brands").findOne({ _id: new ObjectId(brand_id) });
-    }
-
-    sendSuccess(res, { mapped: validRows, brand: finalBrand ? { ...finalBrand, id: finalBrand._id.toString() } : null });
+    const history = await db.collection("download_history").find().sort({ downloaded_at: -1 }).limit(50).toArray();
+    sendSuccess(res, history);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
