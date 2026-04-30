@@ -22,8 +22,8 @@ async function extractPdfText(buffer) {
 }
 
 // ─── OPENAI INIT ───
-const openai = new OpenAI({ 
-  apiKey: process.env.OPENAI_API_KEY || "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" 
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
 });
 
 // ─── ZOD SCHEMAS ───
@@ -144,6 +144,14 @@ const InvoiceSchema = z.object({
   document_info: DocumentInfoSchema
 });
 
+const PartInfoSchema = z.object({
+  parts: z.array(z.object({
+    part_number: z.string(),
+    part_net_wt: z.number().nullable().describe("Net weight of the part in kg. Provide a realistic estimate if exact is unknown."),
+    country_of_origin: z.string().nullable().describe("Country of origin, e.g. 'India' or 'Germany'")
+  }))
+});
+
 // ─── EXTRACTION LOGIC ───
 exports.parseInvoiceFile = async (filePath) => {
   // 1. Read and extract raw text safely
@@ -170,5 +178,39 @@ CRITICAL RULES:
     ]
   });
 
-  return completion.choices[0].message.parsed;
+  const invoice = completion.choices[0].message.parsed;
+  return invoice;
+};
+
+// ─── FETCH MISSING PART METADATA USING AI ───
+exports.fetchPartsInfoAI = async (partNumbers) => {
+  if (!partNumbers || partNumbers.length === 0) return [];
+  
+  const CHUNK_SIZE = 30;
+  const allResults = [];
+
+  try {
+    for (let i = 0; i < partNumbers.length; i += CHUNK_SIZE) {
+      const chunk = partNumbers.slice(i, i + CHUNK_SIZE);
+      const prompt = `Provide the estimated net weight (in kg) and likely country of origin for the following automotive part numbers:\n${chunk.join("\n")}`;
+
+      const completion = await openai.chat.completions.parse({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You are an automotive parts expert. Return the net weight in kg and the likely country of origin. If you are unsure about the weight, give a realistic estimate. Ensure the response matches the schema. You MUST return data for EVERY SINGLE part number requested." },
+          { role: "user", content: prompt }
+        ],
+        response_format: zodResponseFormat(PartInfoSchema, "parts_info")
+      });
+
+      if (completion.choices[0]?.message?.parsed?.parts) {
+        allResults.push(...completion.choices[0].message.parsed.parts);
+      }
+    }
+
+    return allResults;
+  } catch (err) {
+    console.error("AI fetchPartsInfoAI error:", err);
+    return allResults; // Return whatever was successfully processed before the error
+  }
 };
