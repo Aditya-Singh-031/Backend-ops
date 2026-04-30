@@ -74,6 +74,12 @@ exports.uploadPriceListStream = async (req, res) => {
       const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"] || row["Part No."];
       const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"] || row["Base MRP"];
       const descRaw = row["Description"] || row["Desc"] || row["Part Name"] || "";
+      
+      // 💥 Look for GST in the Excel row. Fallback to the global parsedGst
+      const rawRowGst = row["GST (%)"] ?? row["GST %"] ?? row["GST"];
+      const finalGst = (rawRowGst !== undefined && rawRowGst !== "") 
+        ? parseFloat(rawRowGst) / 100 
+        : parsedGst;
 
       if (!partRaw || mrpRaw === undefined || mrpRaw === "") continue;
 
@@ -84,7 +90,6 @@ exports.uploadPriceListStream = async (req, res) => {
       const existingPart = existingMap[cleanPart];
       let history = existingPart?.price_history || [];
 
-      // If part exists and the price has changed, push the old data to history
       if (existingPart && existingPart.mrp !== mrp) {
         history.push({
           mrp: existingPart.mrp,
@@ -101,7 +106,7 @@ exports.uploadPriceListStream = async (req, res) => {
               part_number_original: String(partRaw), 
               description: String(descRaw), 
               mrp: mrp, 
-              gst_rate: parsedGst,
+              gst_rate: finalGst, // 💥 Assign the dynamically checked GST
               vendor_name: vendor_name || "Unknown Vendor",
               updated_at: new Date(),
               price_history: history
