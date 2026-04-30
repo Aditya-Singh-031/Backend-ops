@@ -71,11 +71,10 @@ exports.uploadPriceListStream = async (req, res) => {
     existingParts.forEach(p => existingMap[p.part_number_clean] = p);
 
     for (const row of partsChunk) {
+      // 💥 ADDED "Net Price" to acceptable columns
       const partRaw = row["Part Number"] || row["Part No"] || row["Part #"] || row["part_number"] || row["Part No."];
-      const mrpRaw = row["MRP"] || row["RTLP"] || row["Price"] || row["Base MRP"];
+      const mrpRaw = row["Net Price"] || row["Net price"] || row["MRP"] || row["RTLP"] || row["Price"] || row["Base MRP"];
       const descRaw = row["Description"] || row["Desc"] || row["Part Name"] || "";
-      
-      // 💥 Look for GST in the Excel row. Fallback to the global parsedGst
       const rawRowGst = row["GST (%)"] ?? row["GST %"] ?? row["GST"];
       const finalGst = (rawRowGst !== undefined && rawRowGst !== "") 
         ? parseFloat(rawRowGst) / 100 
