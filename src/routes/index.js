@@ -14,8 +14,6 @@ router.use("/purchase-orders", require("./order.routes"));
 
 router.use("/dashboard", require("./dashboard.routes"));
 router.use("/operations", require("./operation.routes"));
-
-// NEW: Added Prices route for the Brands Tab
 router.use("/prices", require("./price.routes"));
 
 router.use("/order-details", require("./orderDetail.routes"));
@@ -25,5 +23,5 @@ router.use("/warehouse/inwards", require("./whInward.routes"));
 router.use("/warehouse/inventory", require("./whInventory.routes"));
 router.use("/warehouse/files", require("./whFile.routes"));
 router.use("/warehouse/skus", require("./whSku.routes"));
-
+router.use("/suppliers", require("./supplier.routes"));
 module.exports = router;
