@@ -11,10 +11,11 @@ exports.getBrands = async (req, res) => {
 
 exports.createBrand = async (req, res) => {
   const db = await getDb(); 
-  const { name, vendor_notes } = req.body;
+  const { name, vendor_notes, discounts } = req.body;
   const newBrand = {
     name: name.trim(),
     vendor_notes: vendor_notes ? vendor_notes.trim() : null,
+    discounts: Array.isArray(discounts) ? discounts : [], // 💥 NEW: Store discounts
     total_parts: 0,
     created_at: new Date()
   };
@@ -25,12 +26,18 @@ exports.createBrand = async (req, res) => {
 exports.updateBrand = async (req, res) => {
   const db = await getDb(); 
   const { id } = req.params;
-  const { name, vendor_notes } = req.body;
+  const { name, vendor_notes, discounts } = req.body;
+  
+  const updateData = { updated_at: new Date() };
+  if (name) updateData.name = name.trim();
+  if (vendor_notes !== undefined) updateData.vendor_notes = vendor_notes ? vendor_notes.trim() : null;
+  if (discounts !== undefined) updateData.discounts = Array.isArray(discounts) ? discounts : []; // 💥 NEW: Update discounts
+
   await db.collection("brands").updateOne(
     { _id: new ObjectId(id) },
-    { $set: { name: name.trim(), vendor_notes: vendor_notes ? vendor_notes.trim() : null, updated_at: new Date() } }
+    { $set: updateData }
   );
-  sendSuccess(res, { id, name, vendor_notes });
+  sendSuccess(res, { id, name, vendor_notes, discounts: updateData.discounts });
 };
 
 exports.uploadLogo = async (req, res) => {
