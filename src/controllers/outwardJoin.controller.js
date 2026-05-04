@@ -75,7 +75,7 @@ exports.getJoin = async (req, res) => {
     if (partNumbers.length > 0) {
       const lineItems = await db.collection("invoice_line_items")
         .find({ part_number: { $in: partNumbers } })
-        .project({ part_number: 1, description: 1, part_net_wt: 1, net_weight: 1, unit_weight: 1, country_of_origin: 1, _id: 0 })
+        .project({ part_number: 1, description: 1, part_net_wt: 1, net_weight: 1, unit_weight: 1, country_of_origin: 1, hsn_code: 1, _id: 0 })
         .toArray();
       const invoiceMap = {};
       lineItems.forEach((li) => {
@@ -84,7 +84,7 @@ exports.getJoin = async (req, res) => {
 
       const pmItems = await db.collection("product_master")
         .find({ part_number: { $in: partNumbers }, is_deleted: { $ne: true } })
-        .project({ part_number: 1, part_net_wt: 1, country_of_origin: 1, description: 1, _id: 0 })
+        .project({ part_number: 1, part_net_wt: 1, country_of_origin: 1, description: 1, hsn_code: 1, _id: 0 })
         .toArray();
       const pmMap = {};
       pmItems.forEach(pm => {
@@ -98,6 +98,7 @@ exports.getJoin = async (req, res) => {
           description: inv.description || pm.description || "",
           part_net_wt: Number(inv.part_net_wt || inv.net_weight || inv.unit_weight || pm.part_net_wt || 0),
           country_of_origin: inv.country_of_origin || pm.country_of_origin || "",
+          hsn_code: inv.hsn_code || pm.hsn_code || "",
           source: inv.description ? "invoice" : pm.description ? "product_master" : "none"
         };
       });
@@ -110,7 +111,8 @@ exports.getJoin = async (req, res) => {
           description: info.description || fi.description || "",
           description_source: info.source !== "none" ? info.source : "join",
           part_net_wt: info.part_net_wt || fi.part_net_wt || 0,
-          country_of_origin: info.country_of_origin || fi.country_of_origin || ""
+          country_of_origin: info.country_of_origin || fi.country_of_origin || "",
+          hsn_code: info.hsn_code || fi.hsn_code || ""
         };
       });
     }
@@ -519,3 +521,118 @@ exports.removeJoin = async (req, res) => {
   return sendSuccess(res, { message: "Joined orders deleted successfully" });
 };
 
+exports.updatePartInfo = async (req, res) => {
+  const { part_number } = req.body;
+  const { country_of_origin, description, hsn_code, part_net_wt } = req.body;
+  if (!part_number) return sendError(res, "Part number is required", 400);
+
+  const db = await getDb();
+  const updateSet = { updated_at: new Date() };
+  if (country_of_origin !== undefined) updateSet.country_of_origin = country_of_origin;
+  if (description !== undefined) updateSet.description = description;
+  if (hsn_code !== undefined) updateSet.hsn_code = hsn_code;
+  if (part_net_wt !== undefined) updateSet.part_net_wt = Number(part_net_wt);
+
+  await db.collection("product_master").updateOne(
+    { part_number },
+    { $set: updateSet },
+    { upsert: true }
+  );
+
+  sendSuccess(res, { message: "Part info updated successfully" });
+};
+
+// backend-ops/src/controllers/outwardJoin.controller.js
+exports.updateJoinedItemQty = async (req, res) => {
+  const { id } = req.params;
+  const { part_number, order_id, new_qty, rate, description } = req.body;
+  if (!part_number) return sendError(res, "Missing required fields", 400);
+
+  const db = await getDb();
+  
+  // Update the join document
+  const join = await db.collection("outward_order_joins").findOne({ outward_id: id });
+  if (!join) return sendError(res, "Join order not found", 404);
+
+  let updated = false;
+  for (let item of join.fulfilled_items) {
+    if (item.part_number === part_number && (item.order_id === order_id || (!item.order_id && !order_id))) {
+      if (new_qty !== undefined) item.qty_fulfilled = Number(new_qty);
+      if (rate !== undefined) item.rate = Number(rate);
+      if (description !== undefined) item.description = description;
+      updated = true;
+      break;
+    }
+  }
+
+  if (!updated) return sendError(res, "Item not found in join", 404);
+
+  await db.collection("outward_order_joins").updateOne(
+    { outward_id: id },
+    { $set: { fulfilled_items: join.fulfilled_items, updated_at: new Date() } }
+  );
+
+  if (new_qty !== undefined) {
+    // Recalculate total qty for this part_number across the join
+    const totalQty = join.fulfilled_items
+      .filter(i => i.part_number === part_number)
+      .reduce((sum, i) => sum + (Number(i.qty_fulfilled) || 0), 0);
+
+    // Update outward boxes
+    const outward = await db.collection("outwards").findOne({ outward_id: id });
+    if (outward && outward.boxes) {
+      let currentBoxQty = 0;
+      outward.boxes.forEach(b => {
+        (b.items || []).forEach(i => {
+          if (i.sku === part_number) currentBoxQty += Number(i.qty) || 0;
+        });
+      });
+
+      let diff = totalQty - currentBoxQty;
+      
+      if (diff !== 0) {
+        for (let box of outward.boxes) {
+          if (!box.items) box.items = [];
+          let itemIndex = box.items.findIndex(i => i.sku === part_number);
+          
+          if (diff > 0) {
+            // Add to the first box that has it, or the first box overall
+            if (itemIndex !== -1 || outward.boxes[0] === box) {
+              if (itemIndex === -1) {
+                box.items.push({ sku: part_number, qty: diff });
+              } else {
+                box.items[itemIndex].qty = (Number(box.items[itemIndex].qty) || 0) + diff;
+              }
+              diff = 0;
+            }
+          } else if (diff < 0) {
+            // Subtract from boxes until diff is 0
+            if (itemIndex !== -1) {
+              let itemQty = Number(box.items[itemIndex].qty) || 0;
+              let deduct = Math.min(itemQty, Math.abs(diff));
+              box.items[itemIndex].qty = itemQty - deduct;
+              diff += deduct;
+              if (box.items[itemIndex].qty <= 0) {
+                box.items.splice(itemIndex, 1);
+              }
+            }
+          }
+          if (diff === 0) break;
+        }
+        
+        // Update qty_in_box and sku_code for all boxes
+        outward.boxes.forEach(box => {
+          box.qty_in_box = (box.items || []).reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
+          box.sku_code = (box.items || []).map(i => i.sku).filter(Boolean).join(", ");
+        });
+
+        await db.collection("outwards").updateOne(
+          { outward_id: id },
+          { $set: { boxes: outward.boxes, updated_at: new Date() } }
+        );
+      }
+    }
+  }
+
+  return sendSuccess(res, { message: "Item updated successfully" });
+};

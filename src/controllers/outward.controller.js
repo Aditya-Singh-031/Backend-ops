@@ -227,7 +227,7 @@ exports.update = async (req, res) => {
 
 exports.updateBox = async (req, res) => {
   const { id, boxId } = req.params;
-  const { damaged_in_transit, transit_damage_img, comments } = req.body;
+  const { damaged_in_transit, transit_damage_img, comments, items } = req.body;
   const db = await getDb();
 
   const outward = await db.collection("outwards").findOne({ outward_id: id });
@@ -240,6 +240,12 @@ exports.updateBox = async (req, res) => {
   if (damaged_in_transit !== undefined) boxes[boxIndex].damaged_in_transit = damaged_in_transit;
   if (transit_damage_img !== undefined) boxes[boxIndex].transit_damage_img = transit_damage_img;
   if (comments !== undefined) boxes[boxIndex].comments = comments;
+  
+  if (items !== undefined && Array.isArray(items)) {
+    boxes[boxIndex].items = items;
+    boxes[boxIndex].qty_in_box = items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
+    boxes[boxIndex].sku_code = items.map(i => i.sku).filter(Boolean).join(", ");
+  }
 
   await db.collection("outwards").updateOne({ outward_id: id }, { $set: { boxes, updated_at: new Date() } });
   const updated = await db.collection("outwards").findOne({ outward_id: id });
@@ -827,7 +833,8 @@ exports.exportJoin = async (req, res) => {
     { header: "Outward ID",           key: "outward_id",          width: 20 },
     { header: "Order Number",         key: "order_number",        width: 18 },
     { header: "PI Number",            key: "pi_number",           width: 18 },
-    { header: "Part Number",          key: "part_number",         width: 20 },
+    { header: "Packed Part",          key: "part_number",         width: 20 },
+    { header: "Ordered Part",         key: "original_part_number",width: 20 },
     { header: "Description",          key: "description",         width: 35 },
     { header: "HSN Code",             key: "hsn_code",            width: 14 },
     { header: "Brand",                key: "brand",               width: 16 },
@@ -858,6 +865,7 @@ exports.exportJoin = async (req, res) => {
       order_number:     fi.order_number || "",
       pi_number:        piNum,
       part_number:      pn,
+      original_part_number: fi.original_part_number || "",
       description:      desc,
       hsn_code:         info.hsn_code || "",
       brand:            fi.brand || "",

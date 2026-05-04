@@ -8,7 +8,25 @@ exports.list = async (_req, res) => {
   try {
     const db = await getDb();
     const inwards = await db.collection("wh_inwards").find().sort({ inward_date: -1 }).toArray();
-    return sendSuccess(res, inwards);
+
+    const inwardIds = inwards.map(i => i.inward_id);
+    const details = await db.collection("wh_inward_details").find({ inward_id: { $in: inwardIds } }).toArray();
+    
+    const statsMap = {};
+    for (const d of details) {
+      if (!statsMap[d.inward_id]) statsMap[d.inward_id] = { skus: new Set(), total_qty: 0 };
+      if (d.sku_code) statsMap[d.inward_id].skus.add(d.sku_code);
+      const boxesCount = d.boxes ? d.boxes.length : (d.no_of_boxes || 0);
+      statsMap[d.inward_id].total_qty += boxesCount * (Number(d.qty_per_box) || 0);
+    }
+    
+    const inwardsWithStats = inwards.map(i => ({
+      ...i,
+      unique_skus_count: statsMap[i.inward_id] ? statsMap[i.inward_id].skus.size : 0,
+      total_qty: statsMap[i.inward_id] ? statsMap[i.inward_id].total_qty : 0
+    }));
+
+    return sendSuccess(res, inwardsWithStats);
   } catch (err) {
     console.error(err);
     return sendError(res, err.message);
