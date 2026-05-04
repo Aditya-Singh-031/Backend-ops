@@ -1,0 +1,45 @@
+name: Deploy OPS Backend Demo
+
+on:
+  push:
+    branches: [demo]
+  workflow_dispatch:
+
+env:
+  HOST: azureuser@74.225.254.175
+  DIR: /home/azureuser/projects/backend-ops-demo
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_PRIVATE_KEY }}
+
+      - name: Sync files
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ env.HOST }} "mkdir -p ${{ env.DIR }}"
+          rsync -az --delete --exclude='.git' --exclude='node_modules' --exclude='.env*' --exclude='uploads' \
+            ./ ${{ env.HOST }}:${{ env.DIR }}/
+
+      - name: Upload .env
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.ENV_FILE_DEMO }}
+        run: |
+          echo "$ENV_FILE_CONTENT" | base64 > env.b64
+          scp -o StrictHostKeyChecking=no env.b64 ${{ env.HOST }}:${{ env.DIR }}/env.b64
+          rm env.b64
+
+      - name: Install & Restart
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ env.HOST }} << 'EOF'
+            export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            cd ${{ env.DIR }}
+            base64 -d env.b64 > .env && rm env.b64
+            npm ci --omit=dev
+            pm2 reload ecosystem.demo.config.js --update-env || pm2 start ecosystem.demo.config.js
+            pm2 save
+          EOF
