@@ -287,7 +287,23 @@ exports.uploadExcel = async (req, res) => {
       })
       .filter((i) => i.description || i.qty > 0);
 
-    return sendSuccess(res, { items, currencyLabel });
+    let metadata = { packages: "", netWeight: "", grossWeight: "" };
+    rowsAsArrays.forEach((row) => {
+      const rowText = row.map((v) => String(v).trim().toUpperCase()).join(" ");
+      const numbers = row.map((v) => parseFloat(String(v).replace(/,/g, ""))).filter((n) => !isNaN(n));
+      
+      if (rowText.includes("NET WEIGHT") || rowText.includes("TOTAL NET") || rowText.includes("NET WT")) {
+        if (numbers.length > 0) metadata.netWeight = numbers[numbers.length - 1];
+      }
+      if (rowText.includes("GROSS WEIGHT") || rowText.includes("TOTAL GROSS") || rowText.includes("GROSS WT")) {
+        if (numbers.length > 0) metadata.grossWeight = numbers[numbers.length - 1];
+      }
+      if (rowText.includes("PACKAGE") || rowText.includes("PKGS") || rowText.includes("BOXES")) {
+        if (numbers.length > 0) metadata.packages = numbers[numbers.length - 1];
+      }
+    });
+
+    return sendSuccess(res, { items, currencyLabel, metadata });
   } finally {
     fs.unlink(req.file.path, () => {});
   }
