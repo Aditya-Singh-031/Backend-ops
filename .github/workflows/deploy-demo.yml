@@ -2,7 +2,7 @@ name: Deploy OPS Backend Demo
 
 on:
   push:
-    branches: [demo]
+    branches: [main]
   workflow_dispatch:
 
 env:
