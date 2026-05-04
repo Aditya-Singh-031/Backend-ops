@@ -18,9 +18,9 @@ exports.createSupplier = async (req, res) => {
   try {
     const db = await getDb();
     const payload = req.body || {};
-
-    // 💥 BULLETPROOFING: Check every possible key the frontend might be sending
+// 💥 Added supp_name to the top of the accepted list
     const rawName = 
+      payload.supp_name || 
       payload.name || 
       payload.supplierName || 
       payload.supplier_name || 
@@ -28,8 +28,6 @@ exports.createSupplier = async (req, res) => {
       payload.vendor || 
       payload.vendor_name || 
       payload.vendorName;
-
-    // If we STILL can't find the name, return exactly what we received so you can debug it
     if (!rawName) {
       return res.status(400).json({ 
         success: false, 
