@@ -71,8 +71,6 @@ exports.createSupplier = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
-
-// 💥 NEW: Bulk Delete Suppliers
 exports.bulkDeleteSuppliers = async (req, res) => {
   try {
     const db = await getDb();
@@ -82,8 +80,40 @@ exports.bulkDeleteSuppliers = async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid payload" });
     }
 
-    await db.collection("suppliers").deleteMany({ name: { $in: names } });
-    sendSuccess(res, { message: "Suppliers deleted successfully" });
+    // 1. Fetch current aliases to see if any of the target names are "masters"
+    const settingsDoc = await db.collection("settings").findOne({ type: "supplier_aliases" });
+    let aliases = settingsDoc ? settingsDoc.aliases : {};
+    
+    let allNamesToDelete = [...names];
+
+    // 2. Find any underlying child suppliers that were merged into these names
+    for (const [child, master] of Object.entries(aliases)) {
+      if (names.includes(master)) {
+        allNamesToDelete.push(child);
+      }
+    }
+
+    // 3. Delete ALL the target suppliers (masters AND their children)
+    await db.collection("suppliers").deleteMany({ name: { $in: allNamesToDelete } });
+
+    // 4. Clean up the alias table! Remove any alias rules involving the deleted names
+    let aliasesChanged = false;
+    for (const key of Object.keys(aliases)) {
+      if (allNamesToDelete.includes(key) || allNamesToDelete.includes(aliases[key])) {
+        delete aliases[key];
+        aliasesChanged = true;
+      }
+    }
+
+    if (aliasesChanged) {
+      await db.collection("settings").updateOne(
+        { type: "supplier_aliases" },
+        { $set: { aliases: aliases } },
+        { upsert: true }
+      );
+    }
+
+    sendSuccess(res, { message: "Suppliers and aliases deleted successfully" });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
