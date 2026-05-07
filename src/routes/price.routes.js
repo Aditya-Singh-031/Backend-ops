@@ -42,6 +42,5 @@ router.post("/price-list/upload", uploadExcel.single("file"), asyncHandler(excel
 router.post("/price-list/download", asyncHandler(excelCtrl.downloadPriceList));
 router.get("/price-list/history", asyncHandler(excelCtrl.getDownloadHistory)); 
 router.post("/price-list/stream", asyncHandler(excelCtrl.uploadPriceListStream));
-// Add this line. Make sure 'ctrl' points to where you put the function above!
-router.delete("/brands/:brand_id/parts", ctrl.clearPriceList);
+router.delete("/brands/:brand_id/parts", excelCtrl.clearPriceList);
 module.exports = router;
