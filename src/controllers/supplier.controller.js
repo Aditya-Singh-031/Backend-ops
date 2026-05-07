@@ -71,3 +71,20 @@ exports.createSupplier = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+// 💥 NEW: Bulk Delete Suppliers
+exports.bulkDeleteSuppliers = async (req, res) => {
+  try {
+    const db = await getDb();
+    const { names } = req.body;
+    
+    if (!names || !Array.isArray(names)) {
+      return res.status(400).json({ success: false, error: "Invalid payload" });
+    }
+
+    await db.collection("suppliers").deleteMany({ name: { $in: names } });
+    sendSuccess(res, { message: "Suppliers deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};

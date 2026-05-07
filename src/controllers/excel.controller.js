@@ -197,3 +197,24 @@ exports.getDownloadHistory = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+// 💥 NEW: Clear a Brand's entire Price List
+exports.clearPriceList = async (req, res) => {
+  try {
+    const { brand_id } = req.params;
+    const db = await getDb();
+    
+    // 1. Delete all parts tied to this brand
+    await db.collection("parts").deleteMany({ brand_id: new ObjectId(brand_id) });
+    
+    // 2. Reset the brand's SKU count to 0
+    await db.collection("brands").updateOne(
+      { _id: new ObjectId(brand_id) }, 
+      { $set: { total_parts: 0 } }
+    );
+    
+    sendSuccess(res, { message: "Price list cleared successfully" });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};

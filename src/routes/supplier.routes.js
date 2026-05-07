@@ -10,5 +10,6 @@ router.post("/aliases", ctrl.updateAliases);
 
 router.get("/", ctrl.getSuppliers);
 router.post("/", ctrl.createSupplier);
-
+// Add this under your other router.post() lines:
+router.post("/bulk-delete", ctrl.bulkDeleteSuppliers);
 module.exports = router;
