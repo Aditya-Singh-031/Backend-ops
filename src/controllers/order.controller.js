@@ -153,7 +153,6 @@ async function generatePIExcel(order, orderDetail, buyer) {
   ];
 
   details.forEach(([l1, v1, l2, v2]) => {
-    ws.mergeCells(r, 3, r, 4); ws.mergeCells(r, 6, r, 7);
     const lc1 = ws.getCell(r, 1); lc1.value = l1;
     lc1.font = { bold: true, size: 10, color: DARK_TEXT }; lc1.fill = SUBHEADER_FILL;
     ws.mergeCells(r, 2, r, 4);
