@@ -346,14 +346,14 @@ exports.complete = async (req, res) => {
 
     const performWrites = async (opts = {}) => {
       if (inventoryInserts.length > 0) {
-        const r = await db.collection("wh_inventory").insertMany(inventoryInserts, opts);
+        const r = await db.collection("warehouse.inventory").insertMany(inventoryInserts, opts);
         insertedCount += r.insertedCount || inventoryInserts.length;
       }
       if (inventoryUpdateOps.length > 0) {
-        await db.collection("wh_inventory").bulkWrite(inventoryUpdateOps, opts);
+        await db.collection("warehouse.inventory").bulkWrite(inventoryUpdateOps, opts);
       }
       if (inventoryDeleteIds.length > 0) {
-        await db.collection("wh_inventory").deleteMany({ inventory_id: { $in: inventoryDeleteIds } }, opts);
+        await db.collection("warehouse.inventory").deleteMany({ inventory_id: { $in: inventoryDeleteIds } }, opts);
       }
       if (bulkDetailsOps.length > 0) {
         await db.collection("wh_inward_details").bulkWrite(bulkDetailsOps, opts);

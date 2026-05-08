@@ -19,7 +19,7 @@ exports.list = async (req, res) => {
       ];
     }
 
-    const inventory = await db.collection("wh_inventory").find(filter).sort({ last_updated_at: -1 }).limit(500).toArray();
+    const inventory = await db.collection("warehouse.inventory").find(filter).sort({ last_updated_at: -1 }).limit(500).toArray();
     return sendSuccess(res, inventory);
   } catch (error) {
     console.error("Error fetching inventory:", error);
@@ -35,7 +35,7 @@ exports.update = async (req, res) => {
     const { userId = "warehouse_user" } = body;
     const db = await getDb();
 
-    const item = await db.collection("wh_inventory").findOne({ inventory_id: inventoryId });
+    const item = await db.collection("warehouse.inventory").findOne({ inventory_id: inventoryId });
     if (!item) return sendError(res, "Inventory item not found", 404);
 
     const now = new Date().toISOString();
@@ -49,8 +49,8 @@ exports.update = async (req, res) => {
     update.last_updated_at = now;
     update.last_updated_by = userId;
 
-    await db.collection("wh_inventory").updateOne({ inventory_id: inventoryId }, { $set: update });
-    const updated = await db.collection("wh_inventory").findOne({ inventory_id: inventoryId });
+    await db.collection("warehouse.inventory").updateOne({ inventory_id: inventoryId }, { $set: update });
+    const updated = await db.collection("warehouse.inventory").findOne({ inventory_id: inventoryId });
     return sendSuccess(res, updated);
   } catch (error) {
     console.error("Error updating inventory item:", error);
@@ -90,7 +90,7 @@ exports.directAdd = async (req, res) => {
       });
     }
 
-    await db.collection("wh_inventory").insertMany(inventoryDocs);
+    await db.collection("warehouse.inventory").insertMany(inventoryDocs);
     return sendSuccess(res, {
       message: `${inventoryDocs.length} inventory item(s) added directly.`,
       count: inventoryDocs.length, data: inventoryDocs,
