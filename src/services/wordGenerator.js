@@ -197,7 +197,7 @@ async function generateWordInvoice(invoiceData, lineItems, currencyLabel = 'USD'
   if (imgBuffer) {
     headerChildren.push(new Paragraph({
       alignment: AlignmentType.CENTER,
-      children: [new ImageRun({ data: imgBuffer, transformation: { width: 173, height: 60 } })]
+      children: [new ImageRun({ data: imgBuffer, transformation: { width: 200, height: 54 } })]
     }));
   }
   const header = new Header({ children: headerChildren });
@@ -514,7 +514,7 @@ async function generateTaxInvoiceWord(invoiceData, lineItems, exchangeRate) {
       alignment: AlignmentType.CENTER,
       children: [new ImageRun({
         data: imgBuffer,
-        transformation: { width: 200, height: 60 },
+        transformation: { width: 200, height: 54 },
         altText: { description: 'Morsebiz Logo' }
       })]
     }));
@@ -782,7 +782,7 @@ async function generatePIWord(piData, lineItems, currencyLabel = 'INR') {
   if (imgBuffer) {
     headerChildren.push(new Paragraph({
       alignment: AlignmentType.CENTER,
-      children: [new ImageRun({ data: imgBuffer, transformation: { width: 173, height: 60 } })]
+      children: [new ImageRun({ data: imgBuffer, transformation: { width: 200, height: 54 } })]
     }));
   }
   const header = new Header({ children: headerChildren });
