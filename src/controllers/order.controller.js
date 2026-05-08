@@ -1,4 +1,5 @@
 const xlsx = require("xlsx");
+const ExcelJS = require("exceljs");
 const fs = require("fs");
 const path = require("path");
 const { getDb, toObjectId } = require("../config/db");
@@ -84,36 +85,196 @@ async function generatePINumber(db) {
   return `${prefix}${String(nextNum).padStart(3, "0")}`;
 }
 
-function generatePIExcel(order, orderDetail) {
-  const wb = xlsx.utils.book_new();
-  const items = (orderDetail?.items || []).map((item, idx) => ({
-    "Sr No": idx + 1,
-    Brand: item.brand || "",
-    "Part Number": item.part_number || "",
-    Description: item.description || "",
-    Quantity: item.quantity || 0,
-    Rate: item.rate || 0,
-    Amount: (item.quantity || 0) * (item.rate || 0),
-  }));
+async function generatePIExcel(order, orderDetail, buyer) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Morsebiz";
+  const ws = wb.addWorksheet("Proforma Invoice");
 
-  const ws = xlsx.utils.json_to_sheet(items);
-  ws["!cols"] = [{ wch: 6 }, { wch: 12 }, { wch: 18 }, { wch: 30 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
-  xlsx.utils.book_append_sheet(wb, ws, "Items");
+  const COLS = 7;
+  const COL_WIDTHS = [6, 14, 20, 36, 8, 14, 14];
+  COL_WIDTHS.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 
-  const headerInfo = [
-    { Field: "Order Number", Value: order.order_number || "" },
-    { Field: "PI Number", Value: order.pi_number || "" },
-    { Field: "PI Date", Value: order.pi_date ? new Date(order.pi_date).toISOString().split("T")[0] : "" },
-    { Field: "Status", Value: order.status || "" },
-    { Field: "Currency", Value: order.currency || "" },
-    { Field: "Subtotal", Value: order.subtotal || 0 },
-    { Field: "Grand Total", Value: order.grand_total || 0 },
-    { Field: "Payment Terms", Value: order.payment_terms || "" },
-    { Field: "Delivery Terms", Value: order.delivery_terms || "" },
+  const fmt = (amount, curr) => {
+    const n = Number(amount) || 0;
+    const sym = { INR: "\u20B9", USD: "$", EUR: "\u20AC", GBP: "\u00A3" }[curr] || "";
+    return `${sym}${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "-";
+
+  const HEADER_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1A3A8F" } };
+  const SUBHEADER_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8EDF8" } };
+  const TABLE_HEADER_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD0D8F0" } };
+  const TOTAL_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF0F4FF" } };
+  const BORDER_THIN = { style: "thin", color: { argb: "FFB0BBD0" } };
+  const BOX_BORDER = { top: BORDER_THIN, left: BORDER_THIN, bottom: BORDER_THIN, right: BORDER_THIN };
+  const WHITE_TEXT = { argb: "FFFFFFFF" };
+  const DARK_TEXT = { argb: "FF1A1A2E" };
+
+  let r = 1;
+
+  // ── Row 1: Company name header ──────────────────────────────────────────
+  ws.mergeCells(r, 1, r, COLS);
+  const titleCell = ws.getCell(r, 1);
+  titleCell.value = "Morsebiz Technology Services Pvt Ltd";
+  titleCell.font = { bold: true, size: 14, color: WHITE_TEXT, name: "Calibri" };
+  titleCell.alignment = { horizontal: "center", vertical: "middle" };
+  titleCell.fill = HEADER_FILL;
+  ws.getRow(r).height = 28;
+  r++;
+
+  // ── Row 2: Sub-header (address) ──────────────────────────────────────────
+  ws.mergeCells(r, 1, r, COLS);
+  const addrCell = ws.getCell(r, 1);
+  addrCell.value = "20th Floor, CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | GST: 27AAPCM5559A1Z9";
+  addrCell.font = { size: 9, color: { argb: "FF334499" }, italic: true };
+  addrCell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  addrCell.fill = SUBHEADER_FILL;
+  ws.getRow(r).height = 20;
+  r++;
+
+  // ── Row 3: Document title ────────────────────────────────────────────────
+  ws.mergeCells(r, 1, r, COLS);
+  const docTitle = ws.getCell(r, 1);
+  docTitle.value = "PROFORMA INVOICE";
+  docTitle.font = { bold: true, size: 13, color: { argb: "FF1A3A8F" }, underline: true };
+  docTitle.alignment = { horizontal: "center", vertical: "middle" };
+  ws.getRow(r).height = 22;
+  r++;
+
+  r++; // blank spacer
+
+  // ── PI Details block (2 col) ────────────────────────────────────────────
+  const details = [
+    ["PI Number", order.pi_number || "-", "PI Date", fmtDate(order.pi_date || order.order_date)],
+    ["Order Number", order.order_number || "-", "Currency", order.currency || "INR"],
+    ["Payment Terms", order.payment_terms || "-", "Delivery Terms", order.delivery_terms || "-"],
+    ["Buyer", buyer?.cust_name || buyer?.name || "-", "Status", order.status || "-"],
   ];
-  const ws2 = xlsx.utils.json_to_sheet(headerInfo);
-  xlsx.utils.book_append_sheet(wb, ws2, "Order Info");
-  return xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+
+  details.forEach(([l1, v1, l2, v2]) => {
+    ws.mergeCells(r, 3, r, 4); ws.mergeCells(r, 6, r, 7);
+    const lc1 = ws.getCell(r, 1); lc1.value = l1;
+    lc1.font = { bold: true, size: 10, color: DARK_TEXT }; lc1.fill = SUBHEADER_FILL;
+    ws.mergeCells(r, 2, r, 4);
+    const vc1 = ws.getCell(r, 2); vc1.value = v1;
+    vc1.font = { size: 10, color: DARK_TEXT };
+    const lc2 = ws.getCell(r, 5); lc2.value = l2;
+    lc2.font = { bold: true, size: 10, color: DARK_TEXT }; lc2.fill = SUBHEADER_FILL;
+    ws.mergeCells(r, 6, r, 7);
+    const vc2 = ws.getCell(r, 6); vc2.value = v2;
+    vc2.font = { size: 10, color: DARK_TEXT };
+    [lc1, vc1, lc2, vc2].forEach(c => { c.border = BOX_BORDER; c.alignment = { vertical: "middle", wrapText: false }; });
+    ws.getRow(r).height = 18;
+    r++;
+  });
+
+  r++; // spacer
+
+  // ── Items table header ───────────────────────────────────────────────────
+  const colHeaders = ["Sr", "Brand", "Part Number", "Description", "Qty", "Rate", "Amount"];
+  colHeaders.forEach((h, i) => {
+    const c = ws.getCell(r, i + 1);
+    c.value = h;
+    c.font = { bold: true, size: 10, color: WHITE_TEXT };
+    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2146C7" } };
+    c.alignment = { horizontal: "center", vertical: "middle" };
+    c.border = BOX_BORDER;
+  });
+  ws.getRow(r).height = 20;
+  r++;
+
+  // ── Items rows ───────────────────────────────────────────────────────────
+  const items = orderDetail?.items || [];
+  let subtotal = 0;
+  items.forEach((item, idx) => {
+    const qty = Number(item.quantity) || 0;
+    const rate = Number(item.rate) || 0;
+    const amount = qty * rate;
+    subtotal += amount;
+    const rowShade = idx % 2 === 1 ? "FFF7F8FF" : "FFFFFFFF";
+    const rowData = [idx + 1, item.brand || "-", item.part_number || "-", item.description || "-", qty, rate, amount];
+    rowData.forEach((val, i) => {
+      const c = ws.getCell(r, i + 1);
+      c.value = val;
+      c.font = { size: 10, color: DARK_TEXT };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowShade } };
+      c.border = BOX_BORDER;
+      if (i === 0 || i === 4) c.alignment = { horizontal: "center", vertical: "middle" };
+      else if (i === 3) c.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+      else if (i >= 5) { c.alignment = { horizontal: "right", vertical: "middle" }; c.numFmt = "#,##0.00"; }
+    });
+    ws.getRow(r).height = 16;
+    r++;
+  });
+
+  // ── Subtotal row ──────────────────────────────────────────────────────────
+  ws.mergeCells(r, 1, r, 5);
+  const stLabel = ws.getCell(r, 1); stLabel.value = "Subtotal";
+  stLabel.font = { bold: true, size: 10, color: DARK_TEXT };
+  stLabel.alignment = { horizontal: "right", vertical: "middle" };
+  stLabel.fill = TOTAL_FILL; stLabel.border = BOX_BORDER;
+  ws.mergeCells(r, 6, r, 7);
+  const stVal = ws.getCell(r, 6); stVal.value = subtotal;
+  stVal.font = { size: 10, color: DARK_TEXT };
+  stVal.numFmt = "#,##0.00"; stVal.alignment = { horizontal: "right", vertical: "middle" };
+  stVal.fill = TOTAL_FILL; stVal.border = BOX_BORDER;
+  ws.getRow(r).height = 18; r++;
+
+  // ── Grand Total row ───────────────────────────────────────────────────────
+  ws.mergeCells(r, 1, r, 5);
+  const gtLabel = ws.getCell(r, 1); gtLabel.value = "GRAND TOTAL";
+  gtLabel.font = { bold: true, size: 11, color: WHITE_TEXT };
+  gtLabel.alignment = { horizontal: "right", vertical: "middle" };
+  gtLabel.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2146C7" } };
+  gtLabel.border = BOX_BORDER;
+  ws.mergeCells(r, 6, r, 7);
+  const gtVal = ws.getCell(r, 6); gtVal.value = subtotal;
+  gtVal.font = { bold: true, size: 11, color: WHITE_TEXT };
+  gtVal.numFmt = "#,##0.00"; gtVal.alignment = { horizontal: "right", vertical: "middle" };
+  gtVal.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2146C7" } };
+  gtVal.border = BOX_BORDER;
+  ws.getRow(r).height = 20; r++;
+
+  // ── Bank Details ───────────────────────────────────────────────────────────
+  const bank = order.bank_account_info;
+  if (bank?.bank_name) {
+    r++;
+    ws.mergeCells(r, 1, r, COLS);
+    const bankTitle = ws.getCell(r, 1); bankTitle.value = "Bank Account Details";
+    bankTitle.font = { bold: true, size: 11, color: WHITE_TEXT };
+    bankTitle.fill = HEADER_FILL; bankTitle.border = BOX_BORDER;
+    bankTitle.alignment = { horizontal: "left", vertical: "middle" };
+    ws.getRow(r).height = 18; r++;
+
+    const bankRows = [
+      ["Bank Name", bank.bank_name],
+      ["Account Name", bank.account_name],
+      ["Account Number", bank.account_number],
+      ["IFSC Code", bank.ifsc_code],
+      ...(bank.swift_code ? [["SWIFT Code", bank.swift_code]] : []),
+    ];
+    bankRows.forEach(([label, value]) => {
+      ws.mergeCells(r, 2, r, COLS);
+      const lc = ws.getCell(r, 1); lc.value = label;
+      lc.font = { bold: true, size: 10, color: DARK_TEXT }; lc.fill = SUBHEADER_FILL; lc.border = BOX_BORDER;
+      const vc = ws.getCell(r, 2); vc.value = value || "-";
+      vc.font = { size: 10, color: DARK_TEXT }; vc.border = BOX_BORDER;
+      ws.getRow(r).height = 16; r++;
+    });
+  }
+
+  // ── Footer row ────────────────────────────────────────────────────────────
+  r++;
+  ws.mergeCells(r, 1, r, COLS);
+  const footerCell = ws.getCell(r, 1);
+  footerCell.value = "Morsebiz Technology Services Pvt Ltd | Regd. Office: 20th Floor, CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | CIN: U72900MH2021PTC362935";
+  footerCell.font = { size: 8, italic: true, color: { argb: "FF666688" } };
+  footerCell.alignment = { horizontal: "center", wrapText: true };
+  footerCell.fill = SUBHEADER_FILL;
+  ws.getRow(r).height = 24;
+
+  return await wb.xlsx.writeBuffer();
 }
 
 async function syncProductMaster(db, items) {
@@ -396,8 +557,13 @@ exports.downloadExcel = async (req, res) => {
   const order = await db.collection("orders").findOne({ _id: oid });
   if (!order) return sendError(res, "Order not found", 404);
 
+  let buyer = null;
+  if (order.buyer_id) {
+    buyer = await db.collection("buyers").findOne({ _id: toObjectId(order.buyer_id) });
+  }
+
   const orderDetail = await db.collection("order_details").findOne({ order_id: oid, is_deleted: { $ne: true } });
-  const buffer = generatePIExcel(order, orderDetail);
+  const buffer = await generatePIExcel(order, orderDetail, buyer);
 
   const filename = sanitizeFilename(order.pi_number || order.order_number);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
