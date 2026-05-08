@@ -8,9 +8,8 @@ router.use("/shipments", require("./shipment.routes"));
 router.use("/buyers", require("./buyer.routes"));
 router.use("/products", require("./product.routes"));
 router.use("/invoices", require("./invoice.routes"));
-// Mapped both for legacy support
 router.use("/orders", require("./order.routes"));
-router.use("/purchase-orders", require("./order.routes")); 
+router.use("/purchase-orders", require("./purchaseOrder.routes"));
 
 router.use("/dashboard", require("./dashboard.routes"));
 router.use("/operations", require("./operation.routes"));

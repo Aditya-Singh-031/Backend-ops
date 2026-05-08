@@ -1,6 +1,6 @@
 const { v4: uuidv4 } = require("uuid");
 const { getDb } = require("../config/db");
-const aiService = require("../services/ai.service");
+const supplyBillService = require("../services/supplyBill.service");
 const fs = require("fs");
 const ExcelJS = require("exceljs");
 const { sendSuccess, sendError } = require("../utils/response");
@@ -64,8 +64,9 @@ async function processJobBackground(jobId, files) {
       pdfEntry.progress = 50;
       activeJobs.set(jobId, job);
 
-      const parsedData = await aiService.parseInvoiceFile(file.path);
-      console.log(`[Job ${jobId}] ✅ [${i + 1}/${files.length}] AI Extraction Successful`);
+      const parsedData = await supplyBillService.parseSupplyBill(file.path);
+      console.log(`[Job ${jobId}] ✅ [${i + 1}/${files.length}] Parsed via: ${parsedData._extraction_method ?? "unknown"}`);
+      delete parsedData._extraction_method; // don't persist internal flag to DB
 
       // Stage 3: Saving to DB
       console.log(`[Job ${jobId}] 💾 [${i + 1}/${files.length}] Saving to DB...`);
@@ -78,7 +79,7 @@ async function processJobBackground(jobId, files) {
       const invoiceDoc = {
         job_id: jobId,
         invoice_id: invoiceIdStr,
-        pdf_url: `/uploads/${file.filename}`, // Using file.filename (multer generated)
+        pdf_url: `/api/uploads/${file.filename}`, // served as static by Express at /api/uploads
         invoice_metadata: parsedData.invoice_metadata || {},
         seller: parsedData.seller || {},
         buyer: parsedData.buyer || {},
@@ -168,6 +169,61 @@ exports.getJobStatusJson = (req, res) => {
   if (!job) return sendError(res, "Job not found", 404);
   return sendSuccess(res, job);
 };
+
+// ─── GET PARSED DATA for a single invoice (by invoice_id UUID) ───
+// Used by ParsedDataModal on the supply-bill page
+exports.getParsedData = async (req, res) => {
+  try {
+    const { invoice_id } = req.params;
+    const db = await getDb();
+
+    const invoice = await db.collection("invoices").findOne({ invoice_id });
+    if (!invoice) return sendError(res, "Invoice not found", 404);
+
+    const lineItems = await db.collection("invoice_line_items")
+      .find({ invoice_id })
+      .sort({ line_number: 1 })
+      .toArray();
+
+    return sendSuccess(res, {
+      invoice_metadata: invoice.invoice_metadata || {},
+      seller:           invoice.seller || {},
+      buyer:            invoice.buyer || {},
+      consignee:        invoice.consignee || {},
+      gst_details:      invoice.gst_details || {},
+      totals:           invoice.totals || {},
+      shipping:         invoice.shipping || {},
+      document_info:    invoice.document_info || {},
+      pdf_url:          invoice.pdf_url || null,
+      line_items:       lineItems,
+    });
+  } catch (err) {
+    console.error("getParsedData error:", err);
+    return sendError(res, "Failed to fetch parsed data");
+  }
+};
+
+// ─── LINK / UNLINK invoice to a Purchase Order ───
+exports.linkToPO = async (req, res) => {
+  try {
+    const { id } = req.params;        // invoice_id UUID
+    const { po_id } = req.body;       // null to unlink
+
+    const db = await getDb();
+    const result = await db.collection("invoices").updateOne(
+      { invoice_id: id },
+      { $set: { po_id: po_id || null } }
+    );
+
+    if (result.matchedCount === 0) return sendError(res, "Invoice not found", 404);
+    return sendSuccess(res, { invoice_id: id, po_id: po_id || null });
+  } catch (err) {
+    console.error("linkToPO error:", err);
+    return sendError(res, "Failed to update PO link");
+  }
+};
+
+
 
 exports.downloadExcel = async (req, res) => {
   try {

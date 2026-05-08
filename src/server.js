@@ -27,11 +27,22 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
-// 💥 Serve the logo images
+// New uploads: storage/uploads/ served at /api/uploads
 app.use("/api/uploads", express.static(path.join(__dirname, "..", "storage", "uploads")));
 
-// 💥 THE FIX: Tell Node.js to serve the PDFs and bypass Nginx!
+// Old uploads (backward compat): uploads/ folder, files have no extension — force PDF content-type
+app.use("/uploads", (req, _res, next) => {
+  // If URL has no extension, it's an old multer file — tell browser it's a PDF
+  if (!path.extname(req.path)) {
+    _res.setHeader("Content-Type", "application/pdf");
+    _res.setHeader("Content-Disposition", "inline");
+  }
+  next();
+}, express.static(path.join(__dirname, "..", "uploads")));
+
+// Legacy storage path
 app.use("/api/storage", express.static(path.join(__dirname, "..", "storage")));
+
 const { sendSuccess, sendError } = require("./utils/response");
 
 app.get("/api/health", (_req, res) => {

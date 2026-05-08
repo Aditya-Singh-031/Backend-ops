@@ -158,6 +158,11 @@ exports.parseInvoiceFile = async (filePath) => {
   const dataBuffer = fs.readFileSync(filePath);
   const text = await extractPdfText(dataBuffer);
 
+  console.log(`[PDF Parser] Extracted ${text.length} characters from PDF`);
+  if (text.length < 100) {
+    console.warn(`[PDF Parser] WARNING: Very short text extracted (${text.length} chars). PDF may be image-based/scanned.`);
+  }
+
   // 2. Pass to OpenAI
   const completion = await openai.chat.completions.parse({
     model: "gpt-4o-2024-08-06",
@@ -166,13 +171,74 @@ exports.parseInvoiceFile = async (filePath) => {
     messages: [
       {
         role: "system",
-        content: `You are an expert invoice data extraction agent specialized in Indian supply chain invoices.
-CRITICAL RULES:
-1. Extract ALL information exactly as written.
-2. Convert dates to YYYY-MM-DD.
-3. Convert amounts to numbers (remove ₹, Rs, commas).
-4. Extract EVERY single line item.
-5. CRITICAL FIX: Part Numbers are usually alphanumeric strings (e.g. 6RG807421AGRU). Do NOT mistake the Invoice Number, Order Number, or HSN code for the Part Number. Ensure you capture the exact Part Number.`
+        content: `You are an expert invoice data extraction agent specialized in Indian automotive supply chain invoices (e.g. VW, Skoda, Mahindra, Tata supplier invoices / Tax Invoices / Supply Bills).
+
+CRITICAL EXTRACTION RULES:
+1. Extract ALL information exactly as written in the document. Do NOT infer or guess.
+2. Convert ALL dates to YYYY-MM-DD format (e.g. 15/03/2024 → 2024-03-15).
+3. Convert ALL monetary amounts to plain numbers — remove ₹, Rs., commas (e.g. ₹1,23,456.78 → 123456.78).
+4. Extract EVERY SINGLE line item from the table. Do not skip any row.
+
+PART NUMBER RULES (CRITICAL):
+- Part numbers are alphanumeric strings like: 6RG807421AGRU, 5QM945207B, 6Y0145117B, etc.
+- Part numbers are NEVER the Invoice Number, Order ID, PO Number, or HSN/SAC code.
+- Part numbers are typically listed in a "Part No.", "Item Code", "Material No.", or "Description" column.
+- If unsure, prefer the shorter alphanumeric code that is NOT a date, NOT a number-only string, and NOT a GST/IRN number.
+
+LINE ITEM TABLE RULES:
+- S.No / Sr.No → s_no
+- Description / Item Name → description  
+- Part No. / Item Code / Material No. → part_number
+- HSN / SAC / HSN Code → hsn_code
+- Qty / Quantity → quantity (number only)
+- UOM / Unit → unit
+- Rate / Unit Price / MRP → unit_price (number)
+- Disc % / Discount → discount_percent (number)
+- Disc Amount / Discount Value → discount_amount (number)
+- Taxable Value / Base Amount / Assessable Value → base_amount (number)
+- CGST Rate % → cgst_rate (number, e.g. 9 for 9%)
+- CGST Amount → cgst (number)
+- SGST Rate % → sgst_rate (number)
+- SGST Amount → sgst (number)
+- IGST Rate % → igst_rate (number)
+- IGST Amount → igst (number)
+- Total Tax → total_gst (number)
+- Amount with Tax / Total / Grand Total per line → amount_incl_gst (number)
+
+TOTALS RULES:
+- Count total number of line item rows → total_line_items_count
+- Total before discount → total_parts_amount
+- Total Taxable Value / Total Assessable Value → total_taxable_value
+- Invoice Total / Grand Total / Net Payable → invoice_amount
+- Amount in words (if present) → invoice_amount_words
+- Round off amount (if present) → rounding_off_amount
+
+SELLER / BUYER / CONSIGNEE:
+- Seller = the party ISSUING the invoice (Supplier / From)
+- Buyer = the party RECEIVING the goods (Bill To / Sold To)
+- Consignee = party receiving delivery (Ship To / Deliver To) — may be same as buyer
+- Extract GSTIN, PAN, phone, email exactly as shown.
+
+METADATA:
+- Invoice No / Bill No → invoice_number
+- Invoice Date / Bill Date → invoice_date
+- IRN / IRN Number → irn_number
+- Ack. No / Acknowledgement No → acknowledgement_number
+- Ack. Date → acknowledgement_date
+- PO No / Purchase Order No / Sale Order No → sale_order_number
+- PO Date / Order Date → sale_order_date
+
+GST:
+- Registered / Unregistered / Consumer → gst_customer_type
+- Place of Supply / State of Supply → place_of_supply
+- Reverse Charge (Y/N) → reverse_charge_applicable
+
+SHIPPING:
+- Mode of Transport / By Road / By Air → mode_of_transport
+- Vehicle No / LR No / Transporter ID → vehicle_no / lr_gr_no
+- Carrier / Transporter Name → carrier_name
+
+If any field is not present in the document, return null for that field.`
       },
       { role: "user", content: `INVOICE CONTENT:\n${text}` }
     ]
