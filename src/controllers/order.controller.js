@@ -34,22 +34,54 @@ const BANK_ACCOUNTS = {
   },
 };
 
+function getFiscalYear(date = new Date()) {
+  const month = date.getMonth() + 1; // 1-indexed
+  const year = date.getFullYear();
+  // Indian fiscal year: April (4) to March (3)
+  const fyStart = month >= 4 ? year : year - 1;
+  const fyEnd = fyStart + 1;
+  return `${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}`;
+}
+
 async function generateOrderNumber(db) {
-  const year = new Date().getFullYear();
-  const prefix = `ORD-${year}-`;
+  const now = new Date();
+  const fy = getFiscalYear(now);
+  const prefix = `MUM/${fy}/ORD-`;
   const latest = await db
     .collection("orders")
-    .find({ order_number: { $regex: `^${prefix}` } })
+    .find({ order_number: { $regex: `^MUM/${fy}/ORD-` } })
     .sort({ order_number: -1 })
     .limit(1)
     .toArray();
 
   let nextNum = 1;
   if (latest.length > 0) {
-    const lastNum = parseInt(latest[0].order_number.replace(prefix, ""), 10);
+    const lastPart = latest[0].order_number.split("-").pop();
+    const lastNum = parseInt(lastPart, 10);
     if (!isNaN(lastNum)) nextNum = lastNum + 1;
   }
-  return `${prefix}${String(nextNum).padStart(4, "0")}`;
+  return `${prefix}${String(nextNum).padStart(3, "0")}`;
+}
+
+async function generatePINumber(db) {
+  const now = new Date();
+  const fy = getFiscalYear(now);
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const prefix = `MUM/${fy}/${month}/`;
+  const latest = await db
+    .collection("orders")
+    .find({ pi_number: { $regex: `^MUM/${fy}/${month}/` } })
+    .sort({ pi_number: -1 })
+    .limit(1)
+    .toArray();
+
+  let nextNum = 1;
+  if (latest.length > 0) {
+    const lastPart = latest[0].pi_number.split("/").pop();
+    const lastNum = parseInt(lastPart, 10);
+    if (!isNaN(lastNum)) nextNum = lastNum + 1;
+  }
+  return `${prefix}${String(nextNum).padStart(3, "0")}`;
 }
 
 function generatePIExcel(order, orderDetail) {
@@ -112,10 +144,17 @@ exports.getBankAccounts = async (_req, res) => {
   return sendSuccess(res, { accounts: Object.values(BANK_ACCOUNTS) });
 };
 
+exports.getNextPINumber = async (_req, res) => {
+  const db = await getDb();
+  const piNumber = await generatePINumber(db);
+  return sendSuccess(res, { pi_number: piNumber });
+};
+
 exports.create = async (req, res) => {
   const db = await getDb();
   const body = req.body;
   const order_number = await generateOrderNumber(db);
+  const pi_number = body.pi_number?.trim() || await generatePINumber(db);
 
   let bank_account_info = null;
   if (body.bank_account_key && BANK_ACCOUNTS[body.bank_account_key]) {
@@ -145,7 +184,7 @@ exports.create = async (req, res) => {
     order_date: body.order_date ? new Date(body.order_date) : new Date(),
     currency: body.currency || "INR",
     status: body.status || "INQUIRY",
-    pi_number: body.pi_number || "",
+    pi_number: pi_number,
     pi_date: body.pi_date ? new Date(body.pi_date) : null,
     payment_terms: body.payment_terms || "",
     delivery_terms: body.delivery_terms || "FOB",

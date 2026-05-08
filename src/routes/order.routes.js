@@ -12,6 +12,7 @@ const upload = multer({ dest: path.join(__dirname, "../../uploads/") });
 router.use(authMiddleware);
 
 router.get("/bank-accounts", asyncHandler(ctrl.getBankAccounts));
+router.get("/next-pi-number", asyncHandler(ctrl.getNextPINumber));
 router.get("/", asyncHandler(ctrl.list));
 router.post("/", validate(createOrderSchema), asyncHandler(ctrl.create));
 router.get("/download-template", asyncHandler(ctrl.downloadTemplate));
