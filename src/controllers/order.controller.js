@@ -660,3 +660,97 @@ exports.uploadExcel = async (req, res) => {
     fs.unlink(req.file.path, () => {});
   }
 };
+
+/**
+ * POST /purchase-orders/import/preview
+ * Parses an uploaded Excel/CSV PO file and returns a rich preview payload.
+ * Expected columns: Brand, CODE (part number), Quantity, RATE/MRP, Discount%
+ * Response shape (union — satisfies all 3 frontend components):
+ *   { items, line_items, item_count, summary: { mrp_total, final_amount, discount_percent }, warnings }
+ */
+exports.importPreview = async (req, res) => {
+  if (!req.file) return sendError(res, "No file uploaded", 400);
+  try {
+    const workbook = xlsx.readFile(req.file.path);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet, { defval: "" });
+
+    const warnings = [];
+
+    const line_items = rows
+      .map((row, idx) => {
+        // Normalise keys: lowercase, strip non-alphanumeric
+        const nr = {};
+        Object.keys(row).forEach((k) => { nr[k.toLowerCase().replace(/[^a-z0-9]/g, "")] = row[k]; });
+        const gv = (...keys) => {
+          for (const key of keys) {
+            const nk = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+            if (nr[nk] !== undefined && nr[nk] !== "") return nr[nk];
+          }
+          return "";
+        };
+
+        const brand       = String(gv("Brand", "brand") || "").trim();
+        const part_number = String(gv("CODE", "code", "Part Number", "Part No", "PartNo", "partnumber") || "").trim();
+        const description = String(gv("Description", "Desc", "desc") || "").trim();
+        const qty_ordered = safeParseFloat(gv("Quantity", "Qty", "qty", "quantity"));
+        const mrp         = safeParseFloat(gv("RATE/MRP", "MRP", "mrp", "Rate", "rate", "Price", "price"));
+        const discount_percent = safeParseFloat(gv("Discount%", "Discount", "discount", "disc"));
+
+        if (!part_number && !description) {
+          warnings.push(`Row ${idx + 2}: missing part number/code — skipped`);
+          return null;
+        }
+        if (qty_ordered <= 0) {
+          warnings.push(`Row ${idx + 2} (${part_number || description}): quantity is 0 or missing`);
+        }
+
+        const discount_amount = mrp * (discount_percent / 100) * qty_ordered;
+        const line_total = mrp * qty_ordered - discount_amount;
+
+        return {
+          brand,
+          part_number,
+          description,
+          qty_ordered,
+          mrp,
+          discount_percent,
+          discount_amount,
+          line_total,
+          // Legacy flat fields for ExcelImportBanner/uploadExcel compat
+          quantity:    qty_ordered,
+          rate:        mrp,
+        };
+      })
+      .filter(Boolean);
+
+    const mrp_total    = line_items.reduce((s, i) => s + i.mrp * i.qty_ordered, 0);
+    const final_amount = line_items.reduce((s, i) => s + i.line_total, 0);
+    const overall_discount_percent = mrp_total > 0
+      ? Math.round(((mrp_total - final_amount) / mrp_total) * 10000) / 100
+      : 0;
+
+    // `items` key mirrors the old uploadExcel shape so ExcelImportBanner still works
+    const items = line_items.map((i) => ({
+      brand:       i.brand,
+      part_number: i.part_number,
+      description: i.description,
+      quantity:    i.qty_ordered,
+      rate:        i.mrp,
+    }));
+
+    return sendSuccess(res, {
+      item_count: line_items.length,
+      line_items,
+      items,
+      summary: {
+        mrp_total,
+        final_amount,
+        discount_percent: overall_discount_percent,
+      },
+      warnings,
+    });
+  } finally {
+    fs.unlink(req.file.path, () => {});
+  }
+};

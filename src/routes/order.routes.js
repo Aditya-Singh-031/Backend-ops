@@ -16,12 +16,13 @@ router.get("/next-pi-number", asyncHandler(ctrl.getNextPINumber));
 router.get("/", asyncHandler(ctrl.list));
 router.post("/", validate(createOrderSchema), asyncHandler(ctrl.create));
 router.get("/download-template", asyncHandler(ctrl.downloadTemplate));
+router.post("/import/preview", upload.single("file"), asyncHandler(ctrl.importPreview));
+router.post("/upload-excel", upload.single("file"), asyncHandler(ctrl.uploadExcel));
 router.get("/:id", asyncHandler(ctrl.getById));
 router.put("/:id", validate(updateOrderSchema), asyncHandler(ctrl.update));
 router.patch("/:id/status", validate(updateStatusSchema), asyncHandler(ctrl.updateStatus));
 router.delete("/:id", asyncHandler(ctrl.remove));
 router.get("/:id/download-excel", asyncHandler(ctrl.downloadExcel));
 router.get("/:id/download-pdf", asyncHandler(ctrl.downloadPdf));
-router.post("/upload-excel", upload.single("file"), asyncHandler(ctrl.uploadExcel));
 
 module.exports = router;
