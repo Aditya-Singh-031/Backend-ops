@@ -211,7 +211,7 @@ async function generateWordInvoice(invoiceData, lineItems, currencyLabel = 'USD'
       new Paragraph({
         alignment: AlignmentType.CENTER,
         children: [new TextRun({
-          text: 'Regd. Office: 20th Floor, Building No/Flat No – CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | CIN: U72900MH2021PTC362935 | www.morsebiz.com',
+          text: 'Regd. Office: 20th Floor, Building No/Flat No – CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | CIN: U72900MH2021PTC362935',
           size: 14
         })]
       }),
@@ -530,7 +530,7 @@ async function generateTaxInvoiceWord(invoiceData, lineItems, exchangeRate) {
       new Paragraph({
         alignment: AlignmentType.CENTER,
         children: [new TextRun({
-          text: 'Regd. Office: 20th Floor, Building No/Flat No – CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | CIN: U72900MH2021PTC362935 | www.morsebiz.com',
+          text: 'Regd. Office: 20th Floor, Building No/Flat No – CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | CIN: U72900MH2021PTC362935',
           size: 14
         })]
       }),
@@ -796,7 +796,7 @@ async function generatePIWord(piData, lineItems, currencyLabel = 'INR') {
       new Paragraph({
         alignment: AlignmentType.CENTER,
         children: [new TextRun({
-          text: 'Regd. Office: 20th Floor, Building No/Flat No – CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | CIN: U72900MH2021PTC362935 | www.morsebiz.com',
+          text: 'Regd. Office: 20th Floor, Building No/Flat No – CTS No 95 4 B 3&4, 590 Oberoi Garden City, Goregaon East, Mumbai 400063 | CIN: U72900MH2021PTC362935',
           size: 14
         })]
       }),
