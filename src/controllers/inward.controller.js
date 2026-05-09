@@ -221,8 +221,8 @@ exports.listInvoices = async (_req, res) => {
   const invoices = await db
     .collection("invoices")
     .find()
-    .project({ _id: 1, invoice_number: 1, vendor_name: 1, date: 1 })
-    .limit(50)
+    .project({ _id: 1, invoice_number: 1, vendor_name: 1, date: 1, createdAt: 1 })
+    .sort({ createdAt: -1 })
     .toArray();
   sendSuccess(res, invoices);
 };
