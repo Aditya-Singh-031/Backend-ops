@@ -28,7 +28,7 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 
 // New uploads: storage/uploads/ served at /api/uploads
-app.use("/api/uploads", express.static(path.join(__dirname, "..", "storage", "uploads")));
+app.use("/api/uploads", express.static(path.join(__dirname, "..", "storage", "uploads", "pdfs")));
 
 // Old uploads (backward compat): uploads/ folder, files have no extension — force PDF content-type
 app.use("/uploads", (req, _res, next) => {
