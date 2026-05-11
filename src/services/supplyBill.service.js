@@ -243,10 +243,36 @@ async function splitPdfIntoBatches(pdfBuffer) {
 // ─────────────────────────────────────────────────────────────────
 async function tryTextExtraction(filePath) {
   try {
-    const pdfParse = require("pdf-parse");
+    const rawPdfParse = require("pdf-parse");
     const buffer = fs.readFileSync(filePath);
-    const result = await pdfParse(buffer);
-    const text = result && result.text ? result.text.trim() : "";
+    
+    let text = "";
+    if (typeof rawPdfParse === "function") {
+      const result = await rawPdfParse(buffer);
+      text = result && result.text ? result.text.trim() : "";
+    } else if (rawPdfParse && typeof rawPdfParse.default === "function") {
+      const result = await rawPdfParse.default(buffer);
+      text = result && result.text ? result.text.trim() : "";
+    } else if (rawPdfParse && typeof rawPdfParse.PDFParse === "function") {
+      const parser = new rawPdfParse.PDFParse({ data: buffer });
+      await parser.load();
+      const textResult = await parser.getText();
+      if (typeof textResult === "string") {
+        text = textResult.trim();
+      } else if (typeof textResult === "object" && textResult !== null) {
+        // pdf-parse v2 returns an object { '1': 'page 1 text', '2': '...', total: 21 }
+        text = Object.keys(textResult)
+          .filter(key => !isNaN(key))
+          .sort((a, b) => Number(a) - Number(b))
+          .map(key => textResult[key])
+          .join("\n")
+          .trim();
+      }
+    } else {
+      console.error("[SupplyBill] Unrecognized pdf-parse export:", rawPdfParse);
+      return null;
+    }
+
     console.log(`[SupplyBill] pdf-parse: ${text.length} chars extracted`);
     return text.length >= 200 ? text : null;
   } catch (err) {

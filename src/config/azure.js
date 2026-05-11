@@ -2,7 +2,7 @@ const { BlobServiceClient } = require("@azure/storage-blob");
 const { v4: uuidv4 } = require("uuid");
 
 const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
-const containerPath = process.env.AZURE_CONTAINER_NAME || "imagesmay2025/inventory-folder";
+const containerPath = process.env.AZURE_STORAGE_CONTAINER_NAME || "imagesmay2025";
 const [containerName, ...folderParts] = containerPath.split("/");
 const baseFolder = folderParts.length > 0 ? folderParts.join("/") : "";
 

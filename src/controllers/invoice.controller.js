@@ -6,6 +6,7 @@ const path = require("path");
 const ExcelJS = require("exceljs");
 const { sendSuccess, sendError } = require("../utils/response");
 const invoiceExcelService = require("../services/invoiceExcel.service");
+const { uploadFilePathToAzure } = require("../config/azure");
 
 // In-memory job tracker (replaces Redis for immediate frontend feedback)
 const activeJobs = new Map();
@@ -66,6 +67,11 @@ async function processJobBackground(jobId, files) {
       console.log(`[Job ${jobId}] ✅ [${i + 1}/${files.length}] Parsed via: ${parsedData._extraction_method ?? "unknown"}`);
       delete parsedData._extraction_method; 
 
+      // Stage 3: Uploading to Azure
+      console.log(`[Job ${jobId}] ☁️ [${i + 1}/${files.length}] Uploading to Azure...`);
+      const azureUrl = await uploadFilePathToAzure(file.path, file.originalname, "application/pdf");
+
+      // Stage 4: Saving to DB
       console.log(`[Job ${jobId}] 💾 [${i + 1}/${files.length}] Saving to DB...`);
       pdfEntry.status = "saving";
       pdfEntry.message = "Saving to database...";
@@ -76,7 +82,7 @@ async function processJobBackground(jobId, files) {
       const invoiceDoc = {
         job_id: jobId,
         invoice_id: invoiceIdStr,
-        pdf_url: `/api/uploads/${file.filename}`, 
+        pdf_url: azureUrl, // Use Azure Blob Storage URL
         invoice_metadata: parsedData.invoice_metadata || {},
         seller: parsedData.seller || {},
         buyer: parsedData.buyer || {},
@@ -103,6 +109,7 @@ async function processJobBackground(jobId, files) {
         console.log(`[Job ${jobId}] 📦 [${i + 1}/${files.length}] Saved ${itemsToInsert.length} line items`);
       }
 
+      // Stage 5: Done
       pdfEntry.status = "completed";
       pdfEntry.message = "Successfully parsed";
       pdfEntry.progress = 100;
@@ -119,6 +126,15 @@ async function processJobBackground(jobId, files) {
       pdfEntry.message = error.message;
       pdfEntry.progress = 100;
       job.failed_files += 1;
+    } finally {
+      // Cleanup local temp file
+      if (file.path && fs.existsSync(file.path)) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch (unlinkErr) {
+          console.error(`[Job ${jobId}] Failed to delete local file ${file.path}:`, unlinkErr);
+        }
+      }
     }
 
     job.progress = Math.round(((i + 1) / files.length) * 100);

@@ -14,7 +14,16 @@ async function extractPdfText(buffer) {
   } else if (rawPdfParse && typeof rawPdfParse.PDFParse === "function") {
     const parser = new rawPdfParse.PDFParse({ data: buffer });
     await parser.load();
-    return await parser.getText();
+    const textResult = await parser.getText();
+    if (typeof textResult === "string") return textResult;
+    if (typeof textResult === "object" && textResult !== null) {
+      return Object.keys(textResult)
+        .filter(key => !isNaN(key))
+        .sort((a, b) => Number(a) - Number(b))
+        .map(key => textResult[key])
+        .join("\n");
+    }
+    return "";
   } else {
     console.error("Unrecognized pdf-parse export:", rawPdfParse);
     throw new Error("PDF Library failed to load as a function. Format unrecognized.");
