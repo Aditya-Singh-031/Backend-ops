@@ -6,8 +6,6 @@ const path = require("path");
 
 const fs = require("fs");
 
-// Save PDFs to storage/uploads/ with original .pdf extension preserved
-// This folder is already served as static at /api/uploads by the Express server
 const uploadsDir = path.join(__dirname, "../../storage/uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -22,14 +20,17 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-
 router.use(authMiddleware);
 
 router.post("/upload",                  upload.array("files", 20), ctrl.uploadInvoices);
 router.get("/status/:job_id",           ctrl.getJobStatus);
 router.get("/status-json/:job_id",      ctrl.getJobStatusJson);
 router.get("/download/:job_id",         ctrl.downloadExcel);
-router.get("/:invoice_id/parsed-data",  ctrl.getParsedData);   // ← view parsed invoice + line items
-router.patch("/:id/link-po",            ctrl.linkToPO);         // ← link/unlink invoice to a PO
+router.get("/:invoice_id/parsed-data",  ctrl.getParsedData);   
+router.patch("/:id/link-po",            ctrl.linkToPO);         
+
+// 💥 NEW ROUTES FOR SELF-HEALING PDFS
+router.get("/:invoice_id/find-pdf",     ctrl.findMissingPdf);
+router.patch("/:invoice_id/update-pdf", ctrl.updatePdfUrl);
 
 module.exports = router;

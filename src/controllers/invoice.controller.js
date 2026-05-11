@@ -2,9 +2,11 @@ const { v4: uuidv4 } = require("uuid");
 const { getDb } = require("../config/db");
 const supplyBillService = require("../services/supplyBill.service");
 const fs = require("fs");
+const path = require("path");
 const ExcelJS = require("exceljs");
 const { sendSuccess, sendError } = require("../utils/response");
 const invoiceExcelService = require("../services/invoiceExcel.service");
+
 // In-memory job tracker (replaces Redis for immediate frontend feedback)
 const activeJobs = new Map();
 
@@ -30,12 +32,10 @@ exports.uploadInvoices = async (req, res) => {
 
   activeJobs.set(jobId, jobData);
   
-  // Process in background
   processJobBackground(jobId, files).catch(err => {
     console.error(`[Job ${jobId}] Critical background error:`, err);
   });
 
-  // Respond instantly so UI shows "Processing..."
   return sendSuccess(res, { job_id: jobId, message: "Processing started", total_files: files.length });
 };
 
@@ -50,14 +50,12 @@ async function processJobBackground(jobId, files) {
     
     console.log(`[Job ${jobId}] 📄 [${i + 1}/${files.length}] Processing: ${file.originalname}`);
 
-    // Stage 1: Reading PDF
     pdfEntry.status = "parsing";
     pdfEntry.message = "Reading PDF...";
     pdfEntry.progress = 20;
     activeJobs.set(jobId, job);
 
     try {
-      // Stage 2: AI Extracting
       console.log(`[Job ${jobId}] 🤖 [${i + 1}/${files.length}] AI Extracting...`);
       pdfEntry.status = "extracting";
       pdfEntry.message = "AI Extracting data...";
@@ -66,9 +64,8 @@ async function processJobBackground(jobId, files) {
 
       const parsedData = await supplyBillService.parseSupplyBill(file.path);
       console.log(`[Job ${jobId}] ✅ [${i + 1}/${files.length}] Parsed via: ${parsedData._extraction_method ?? "unknown"}`);
-      delete parsedData._extraction_method; // don't persist internal flag to DB
+      delete parsedData._extraction_method; 
 
-      // Stage 3: Saving to DB
       console.log(`[Job ${jobId}] 💾 [${i + 1}/${files.length}] Saving to DB...`);
       pdfEntry.status = "saving";
       pdfEntry.message = "Saving to database...";
@@ -79,7 +76,7 @@ async function processJobBackground(jobId, files) {
       const invoiceDoc = {
         job_id: jobId,
         invoice_id: invoiceIdStr,
-        pdf_url: `/api/uploads/${file.filename}`, // served as static by Express at /api/uploads
+        pdf_url: `/api/uploads/${file.filename}`, 
         invoice_metadata: parsedData.invoice_metadata || {},
         seller: parsedData.seller || {},
         buyer: parsedData.buyer || {},
@@ -106,7 +103,6 @@ async function processJobBackground(jobId, files) {
         console.log(`[Job ${jobId}] 📦 [${i + 1}/${files.length}] Saved ${itemsToInsert.length} line items`);
       }
 
-      // Stage 4: Done
       pdfEntry.status = "completed";
       pdfEntry.message = "Successfully parsed";
       pdfEntry.progress = 100;
@@ -141,7 +137,7 @@ exports.getJobStatus = (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  const flushPadding = " ".repeat(4096); // Forces Nginx to push stream instantly
+  const flushPadding = " ".repeat(4096); 
 
   const interval = setInterval(() => {
     const job = activeJobs.get(jobId);
@@ -162,7 +158,6 @@ exports.getJobStatus = (req, res) => {
   req.on("close", () => clearInterval(interval));
 };
 
-// Simple JSON polling endpoint — no SSE, just returns current job state
 exports.getJobStatusJson = (req, res) => {
   const jobId = req.params.job_id;
   const job = activeJobs.get(jobId);
@@ -170,8 +165,6 @@ exports.getJobStatusJson = (req, res) => {
   return sendSuccess(res, job);
 };
 
-// ─── GET PARSED DATA for a single invoice (by invoice_id UUID) ───
-// Used by ParsedDataModal on the supply-bill page
 exports.getParsedData = async (req, res) => {
   try {
     const { invoice_id } = req.params;
@@ -203,11 +196,10 @@ exports.getParsedData = async (req, res) => {
   }
 };
 
-// ─── LINK / UNLINK invoice to a Purchase Order ───
 exports.linkToPO = async (req, res) => {
   try {
-    const { id } = req.params;        // invoice_id UUID
-    const { po_id } = req.body;       // null to unlink
+    const { id } = req.params;
+    const { po_id } = req.body;
 
     const db = await getDb();
     const result = await db.collection("invoices").updateOne(
@@ -222,6 +214,7 @@ exports.linkToPO = async (req, res) => {
     return sendError(res, "Failed to update PO link");
   }
 };
+
 exports.downloadExcel = async (req, res) => {
   try {
     const workbook = await invoiceExcelService.generateJobExcel(req.params.job_id);
@@ -235,5 +228,60 @@ exports.downloadExcel = async (req, res) => {
   } catch (err) {
     console.error("Error generating Excel:", err);
     return sendError(res, err.message || "Failed to generate Excel file", 404);
+  }
+};
+
+// 💥 NEW: Auto-search for missing PDFs in the folder
+exports.findMissingPdf = async (req, res) => {
+  try {
+    const { invoice_id } = req.params;
+    const db = await getDb();
+    const invoice = await db.collection("invoices").findOne({ invoice_id });
+    if (!invoice) return sendError(res, "Invoice not found", 404);
+
+    const invNumber = invoice.invoice_metadata?.invoice_number;
+    if (!invNumber) return sendError(res, "No invoice number to search with", 400);
+
+    // Remove dashes/slashes to match cleanly
+    const cleanInvNum = String(invNumber).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    
+    const pdfsDir = path.join(__dirname, "../../storage/uploads/pdfs");
+    if (!fs.existsSync(pdfsDir)) return sendError(res, "PDF directory not found on server", 500);
+
+    const files = fs.readdirSync(pdfsDir);
+    
+    const candidate = files.find(file => {
+      if (!file.toLowerCase().endsWith(".pdf")) return false;
+      const cleanFileName = file.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      return cleanFileName.includes(cleanInvNum);
+    });
+
+    if (candidate) {
+      return sendSuccess(res, { candidate_url: `/api/uploads/${candidate}` });
+    } else {
+      return sendError(res, "No matching PDF found in storage folder", 404);
+    }
+  } catch (err) {
+    console.error("findMissingPdf error:", err);
+    return sendError(res, "Failed to search for missing PDF", 500);
+  }
+};
+
+// 💥 NEW: Permanently link the newly found PDF to the database
+exports.updatePdfUrl = async (req, res) => {
+  try {
+    const { invoice_id } = req.params;
+    const { new_pdf_url } = req.body;
+    if (!new_pdf_url) return sendError(res, "Missing new_pdf_url", 400);
+
+    const db = await getDb();
+    await db.collection("invoices").updateOne(
+      { invoice_id },
+      { $set: { pdf_url: new_pdf_url } }
+    );
+    return sendSuccess(res, { message: "PDF permanently linked", pdf_url: new_pdf_url });
+  } catch (err) {
+    console.error("Update PDF error:", err);
+    return sendError(res, "Failed to permanently link PDF");
   }
 };
