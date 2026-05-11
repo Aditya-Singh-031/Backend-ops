@@ -230,8 +230,7 @@ exports.downloadExcel = async (req, res) => {
     return sendError(res, err.message || "Failed to generate Excel file", 404);
   }
 };
-
-// 💥 NEW: Auto-search for missing PDFs in the folder
+// 💥 NEW: Auto-search for missing PDFs with aggressive fallback logic
 exports.findMissingPdf = async (req, res) => {
   try {
     const { invoice_id } = req.params;
@@ -239,12 +238,22 @@ exports.findMissingPdf = async (req, res) => {
     const invoice = await db.collection("invoices").findOne({ invoice_id });
     if (!invoice) return sendError(res, "Invoice not found", 404);
 
-    const invNumber = invoice.invoice_metadata?.invoice_number;
-    if (!invNumber) return sendError(res, "No invoice number to search with", 400);
+    let searchTerm = invoice.invoice_metadata?.invoice_number;
+
+    // 💥 THE MAGIC: If the AI didn't extract an invoice number, extract it directly from the broken filename!
+    if (!searchTerm && invoice.pdf_url) {
+      const parts = invoice.pdf_url.split("_");
+      if (parts.length > 1) {
+        searchTerm = parts[parts.length - 1].replace(".pdf", "");
+      }
+    }
+
+    if (!searchTerm) return sendError(res, "No invoice number or filename to search with", 400);
 
     // Remove dashes/slashes to match cleanly
-    const cleanInvNum = String(invNumber).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    const cleanSearchTerm = String(searchTerm).replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
     
+    // Looks exactly where you put the files
     const pdfsDir = path.join(__dirname, "../../storage/uploads/pdfs");
     if (!fs.existsSync(pdfsDir)) return sendError(res, "PDF directory not found on server", 500);
 
@@ -253,7 +262,7 @@ exports.findMissingPdf = async (req, res) => {
     const candidate = files.find(file => {
       if (!file.toLowerCase().endsWith(".pdf")) return false;
       const cleanFileName = file.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-      return cleanFileName.includes(cleanInvNum);
+      return cleanFileName.includes(cleanSearchTerm);
     });
 
     if (candidate) {
@@ -266,7 +275,6 @@ exports.findMissingPdf = async (req, res) => {
     return sendError(res, "Failed to search for missing PDF", 500);
   }
 };
-
 // 💥 NEW: Permanently link the newly found PDF to the database
 exports.updatePdfUrl = async (req, res) => {
   try {
