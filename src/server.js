@@ -40,8 +40,9 @@ app.use("/uploads", (req, _res, next) => {
   next();
 }, express.static(path.join(__dirname, "..", "uploads")));
 
-// Legacy storage path
-app.use("/api/storage", express.static(path.join(__dirname, "..", "storage")));
+// 💥 THE FIX: Serve the storage folder directly at /storage so the DB paths work instantly!
+app.use("/storage", express.static(path.join(__dirname, "..", "storage")));
+app.use("/api/storage", express.static(path.join(__dirname, "..", "storage"))); // Keep for fallback
 
 const { sendSuccess, sendError } = require("./utils/response");
 
@@ -55,7 +56,6 @@ app.use((err, _req, res, _next) => {
   console.error("Unhandled error:", err);
   return sendError(res, err.message, err.status || 500);
 });
-
 
 const PORT = process.env.PORT || 5003;
 
