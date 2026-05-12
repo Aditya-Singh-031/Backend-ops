@@ -221,7 +221,7 @@ exports.listInvoices = async (_req, res) => {
   const invoices = await db
     .collection("invoices")
     .find()
-    .sort({ createdAt: -1 })
+    .sort({ created_at: -1 })
     .toArray();
 
   const formattedInvoices = invoices.map(inv => ({
@@ -231,7 +231,7 @@ exports.listInvoices = async (_req, res) => {
     date: inv.invoice_metadata?.invoice_date || inv.invoice_date || inv.date,
     total_amount: inv.totals?.total_parts_amount || 0,
     total_with_gst: inv.totals?.invoice_amount || inv.total_amount || 0,
-    createdAt: inv.createdAt
+    created_at: inv.created_at || inv.createdAt
   }));
 
   sendSuccess(res, formattedInvoices);
