@@ -221,10 +221,20 @@ exports.listInvoices = async (_req, res) => {
   const invoices = await db
     .collection("invoices")
     .find()
-    .project({ _id: 1, invoice_number: 1, vendor_name: 1, date: 1, createdAt: 1 })
     .sort({ createdAt: -1 })
     .toArray();
-  sendSuccess(res, invoices);
+
+  const formattedInvoices = invoices.map(inv => ({
+    _id: inv._id,
+    invoice_number: inv.invoice_metadata?.invoice_number || inv.invoice_number || inv.invoice_id,
+    vendor_name: inv.seller?.name || inv.vendor_name || "Unknown",
+    date: inv.invoice_metadata?.invoice_date || inv.invoice_date || inv.date,
+    total_amount: inv.totals?.total_parts_amount || 0,
+    total_with_gst: inv.totals?.invoice_amount || inv.total_amount || 0,
+    createdAt: inv.createdAt
+  }));
+
+  sendSuccess(res, formattedInvoices);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

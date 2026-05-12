@@ -239,7 +239,15 @@ exports.getInvoices = async (req, res) => {
     ? await db.collection("invoices").find({ _id: { $in: invoiceOids } }).toArray()
     : [];
 
-  return sendSuccess(res, invoices);
+  const formattedInvoices = invoices.map(inv => ({
+    _id: inv._id,
+    invoice_number: inv.invoice_metadata?.invoice_number || inv.invoice_number || "N/A",
+    vendor_name: inv.seller?.name || inv.vendor_name || "Unknown",
+    total_value: inv.totals?.invoice_amount || inv.total_amount || 0,
+    created_at: inv.created_at || inv.createdAt
+  }));
+
+  return sendSuccess(res, formattedInvoices);
 };
 
 // ── Unlink Invoices ───────────────────────────────────────────────────────────
