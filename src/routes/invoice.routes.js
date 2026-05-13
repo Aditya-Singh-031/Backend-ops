@@ -3,10 +3,11 @@ const ctrl = require("../controllers/invoice.controller");
 const { authMiddleware } = require("../middleware/auth");
 const multer = require("multer");
 const path = require("path");
-
 const fs = require("fs");
 
-const uploadsDir = path.join(__dirname, "../../storage/uploads");
+// 💥 THE FIX: We added "/pdfs" to the end of this path!
+// Now Multer will save new uploads directly into the folder that server.js is serving.
+const uploadsDir = path.join(__dirname, "../../storage/uploads/pdfs");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -29,7 +30,7 @@ router.get("/download/:job_id",         ctrl.downloadExcel);
 router.get("/:invoice_id/parsed-data",  ctrl.getParsedData);   
 router.patch("/:id/link-po",            ctrl.linkToPO);         
 
-// 💥 NEW ROUTES FOR SELF-HEALING PDFS
+// Self-healing routes
 router.get("/:invoice_id/find-pdf",     ctrl.findMissingPdf);
 router.patch("/:invoice_id/update-pdf", ctrl.updatePdfUrl);
 
